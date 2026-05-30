@@ -3,11 +3,19 @@ const MODAL_ENDPOINT = "https://manaan-pahwa--shoplens-backend-analyze.modal.run
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('[ShopLens] Message received: ' + message.type);
-  if (message.type === "ANALYZE_FRAME") {
+  // Guard: sender.tab is undefined if message came from an extension page, not a content script
+  if (message.type === "ANALYZE_FRAME" && sender.tab && sender.tab.id) {
     handleAnalysis(message.imageB64, sender.tab.id);
   }
   return true; // Required to keep message channel open for async response
 });
+
+function safeSendMessage(tabId, payload) {
+  chrome.tabs.sendMessage(tabId, payload).catch((err) => {
+    // "Receiving end does not exist" is expected if the tab navigated away — suppress it
+    console.log('[ShopLens] sendMessage suppressed:', err.message);
+  });
+}
 
 async function handleAnalysis(imageB64, tabId) {
   console.log('[ShopLens] imageB64 length received: ' + (imageB64 ? imageB64.length : 'undefined/null'));
@@ -36,14 +44,14 @@ async function handleAnalysis(imageB64, tabId) {
     const data = await response.json();
     const products = data.products || [];
 
-    chrome.tabs.sendMessage(tabId, {
+    safeSendMessage(tabId, {
       type: "PRODUCTS_RESULT",
       products: products.slice(0, 3)
     });
 
   } catch (error) {
     console.log("[ShopLens] Fetch error:", error.message);
-    chrome.tabs.sendMessage(tabId, {
+    safeSendMessage(tabId, {
       type: "PRODUCTS_RESULT",
       products: [],
       error: error.message
