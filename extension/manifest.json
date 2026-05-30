@@ -8,7 +8,8 @@
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://serpapi.com/*",
-    "https://0x0.st/*"
+    "https://0x0.st/*",
+    "https://*.modal.run/*"
   ],
   "background": {
     "service_worker": "background.js",
