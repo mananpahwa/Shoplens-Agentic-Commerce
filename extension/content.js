@@ -117,7 +117,60 @@ function renderPanel(products) {
 
 // ─── PART D: FRAME CAPTURE AND SEND ──────────────────────────────────────────
 
-function triggerAnalysis() {
+// Captures a JPEG frame from the video element as a pure base64 string.
+// Uses ImageCapture API (Method 1) to bypass cross-origin canvas taint on
+// YouTube videos (served from googlevideo.com). Falls back to direct canvas
+// draw (Method 2) for browsers without ImageCapture support.
+async function captureFrame(video) {
+  // Method 1: ImageCapture API — grabs an ImageBitmap from the video stream.
+  // ImageBitmap obtained this way is NOT tainted, so toDataURL() works.
+  if ('ImageCapture' in window) {
+    let stream = null;
+    let track = null;
+    try {
+      stream = video.captureStream();
+      track = stream.getVideoTracks()[0];
+      if (track) {
+        const imageCapture = new ImageCapture(track);
+        const bitmap = await imageCapture.grabFrame();
+
+        const canvas = document.createElement('canvas');
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(bitmap, 0, 0);
+        bitmap.close();
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        console.log('[ShopLens] Captured via ImageCapture API');
+        return dataUrl.split(',')[1];
+      }
+    } catch (e) {
+      console.log('[ShopLens] ImageCapture failed:', e.message);
+    } finally {
+      if (track) track.stop();
+      if (stream) stream.getTracks().forEach(t => t.stop());
+    }
+  }
+
+  // Method 2: Direct canvas draw — works if the browser doesn't enforce taint
+  // for this context (some Chromium builds / extension contexts allow it).
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+    console.log('[ShopLens] Captured via direct canvas draw');
+    return dataUrl.split(',')[1];
+  } catch (e) {
+    console.log('[ShopLens] Direct canvas draw also failed:', e.message);
+    return null;
+  }
+}
+
+async function triggerAnalysis() {
   console.log('[ShopLens] Button clicked');
 
   if (isLoading) return;
@@ -135,31 +188,10 @@ function triggerAnalysis() {
 
   console.log('[ShopLens] Video found: ' + video.videoWidth + 'x' + video.videoHeight);
 
-  const canvas = document.createElement('canvas');
-  const width = video.videoWidth || 1280;
-  const height = video.videoHeight || 720;
-  canvas.width = width;
-  canvas.height = height;
-
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, width, height);
-
-  let imageB64;
-  try {
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-    // Strip data URL prefix — backend expects pure base64
-    imageB64 = dataUrl.split(',')[1];
-  } catch (e) {
-    // Cross-origin canvas taint: YouTube video drawn to canvas is restricted.
-    // Fallback: capture via ImageCapture API if available, else report error.
-    console.log('[ShopLens] Canvas toDataURL failed (cross-origin taint):', e.message);
-    showToast('Frame capture blocked — try pausing the video first');
-    resetButton();
-    return;
-  }
+  const imageB64 = await captureFrame(video);
 
   if (!imageB64 || imageB64.length < 100) {
-    console.log('[ShopLens] imageB64 is empty or too short — canvas may be blank');
+    console.log('[ShopLens] imageB64 is empty or too short — all capture methods failed');
     showToast('Could not capture frame — try again');
     resetButton();
     return;
