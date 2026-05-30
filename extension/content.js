@@ -6,7 +6,6 @@ let panelVisible = false;
 let dismissedThisSession = [];
 
 // ─── PART G: UTILITY FUNCTIONS ───────────────────────────────────────────────
-// (defined first so all other functions can call them)
 
 function escapeHtml(str) {
   if (!str) return '';
@@ -51,7 +50,6 @@ function closePanel() {
 // ─── PART F: RENDER OVERLAY PANEL ────────────────────────────────────────────
 
 function renderPanel(products) {
-  // Remove any existing panel
   const existing = document.querySelector('.shoplens-panel');
   if (existing) existing.remove();
 
@@ -60,7 +58,6 @@ function renderPanel(products) {
   const panel = document.createElement('div');
   panel.className = 'shoplens-panel';
 
-  // Header
   const header = document.createElement('div');
   header.className = 'shoplens-panel-header';
   header.innerHTML = `
@@ -69,7 +66,6 @@ function renderPanel(products) {
   `;
   header.querySelector('.shoplens-close-btn').addEventListener('click', closePanel);
 
-  // Products list
   const list = document.createElement('div');
   list.className = 'shoplens-products-list';
 
@@ -96,7 +92,6 @@ function renderPanel(products) {
     list.appendChild(card);
   });
 
-  // Shop Now button
   const shopBtn = document.createElement('button');
   shopBtn.className = 'shoplens-shop-btn';
   shopBtn.textContent = 'Shop Now →';
@@ -111,20 +106,20 @@ function renderPanel(products) {
   panel.appendChild(shopBtn);
   document.body.appendChild(panel);
 
-  // Trigger slide-in animation (double rAF ensures transition fires)
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       panel.classList.add('visible');
     });
   });
 
-  // Auto-dismiss after 45 seconds
   setTimeout(() => closePanel(), 45000);
 }
 
 // ─── PART D: FRAME CAPTURE AND SEND ──────────────────────────────────────────
 
 function triggerAnalysis() {
+  console.log('[ShopLens] Button clicked');
+
   if (isLoading) return;
 
   isLoading = true;
@@ -138,6 +133,8 @@ function triggerAnalysis() {
     return;
   }
 
+  console.log('[ShopLens] Video found: ' + video.videoWidth + 'x' + video.videoHeight);
+
   const canvas = document.createElement('canvas');
   const width = video.videoWidth || 1280;
   const height = video.videoHeight || 720;
@@ -147,11 +144,34 @@ function triggerAnalysis() {
   const ctx = canvas.getContext('2d');
   ctx.drawImage(video, 0, 0, width, height);
 
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-  // CRITICAL: strip data URL prefix — backend expects pure base64
-  const imageB64 = dataUrl.split(',')[1];
+  let imageB64;
+  try {
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+    // Strip data URL prefix — backend expects pure base64
+    imageB64 = dataUrl.split(',')[1];
+  } catch (e) {
+    // Cross-origin canvas taint: YouTube video drawn to canvas is restricted.
+    // Fallback: capture via ImageCapture API if available, else report error.
+    console.log('[ShopLens] Canvas toDataURL failed (cross-origin taint):', e.message);
+    showToast('Frame capture blocked — try pausing the video first');
+    resetButton();
+    return;
+  }
+
+  if (!imageB64 || imageB64.length < 100) {
+    console.log('[ShopLens] imageB64 is empty or too short — canvas may be blank');
+    showToast('Could not capture frame — try again');
+    resetButton();
+    return;
+  }
+
+  console.log('[ShopLens] imageB64 length: ' + imageB64.length);
+  console.log('[ShopLens] Sending to background...');
 
   chrome.runtime.sendMessage({ type: 'ANALYZE_FRAME', imageB64 })
+    .then(() => {
+      console.log('[ShopLens] Message sent');
+    })
     .catch((err) => {
       console.log('[ShopLens] Send error:', err);
       showToast('Try again in a moment');

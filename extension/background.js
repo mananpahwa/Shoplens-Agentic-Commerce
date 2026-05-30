@@ -1,8 +1,8 @@
 // ShopLens Background Service Worker
-// IMPORTANT: Replace MODAL_ENDPOINT with your actual Modal URL after deploy
 const MODAL_ENDPOINT = "https://manaan-pahwa--shoplens-backend-analyze.modal.run";
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  console.log('[ShopLens] Message received: ' + message.type);
   if (message.type === "ANALYZE_FRAME") {
     handleAnalysis(message.imageB64, sender.tab.id);
   }
@@ -10,10 +10,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function handleAnalysis(imageB64, tabId) {
+  console.log('[ShopLens] imageB64 length received: ' + (imageB64 ? imageB64.length : 'undefined/null'));
+
   try {
-    // AbortController for timeout — 20 seconds to handle Modal cold starts
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+    console.log('[ShopLens] Fetching Modal endpoint...');
 
     const response = await fetch(MODAL_ENDPOINT, {
       method: "POST",
@@ -23,6 +26,8 @@ async function handleAnalysis(imageB64, tabId) {
     });
 
     clearTimeout(timeoutId);
+
+    console.log('[ShopLens] Modal response status: ' + response.status);
 
     if (!response.ok) {
       throw new Error("HTTP " + response.status);
