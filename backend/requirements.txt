@@ -1,0 +1,5 @@
+ultralytics==8.3.100
+pillow==11.2.1
+requests==2.32.3
+fastapi==0.115.12
+python-multipart==0.0.20

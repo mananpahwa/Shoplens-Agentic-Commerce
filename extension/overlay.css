@@ -1,0 +1,214 @@
+/* ShopLens Overlay — all classes prefixed shoplens- to avoid YouTube CSS conflicts */
+
+.shoplens-btn {
+  position: fixed;
+  bottom: 80px;
+  right: 16px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #e8593c;
+  box-shadow: 0 4px 16px rgba(232, 89, 60, 0.4);
+  cursor: pointer;
+  z-index: 99998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s, opacity 0.2s;
+  border: none;
+  outline: none;
+}
+
+.shoplens-btn:hover {
+  transform: scale(1.08);
+}
+
+.shoplens-btn.loading {
+  animation: shoplens-pulse 1s ease-in-out infinite;
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+.shoplens-btn svg {
+  width: 22px;
+  height: 22px;
+  fill: white;
+}
+
+.shoplens-panel {
+  position: fixed;
+  top: 80px;
+  right: 16px;
+  width: 280px;
+  max-height: 80vh;
+  background: rgba(10, 10, 15, 0.96);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  z-index: 99999;
+  overflow: hidden;
+  transform: translateX(320px);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.shoplens-panel.visible {
+  transform: translateX(0);
+}
+
+.shoplens-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.shoplens-panel-title {
+  color: #888780;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.shoplens-close-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #888780;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background 0.15s, color 0.15s;
+}
+
+.shoplens-close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f0efe8;
+}
+
+.shoplens-products-list {
+  padding: 8px 0;
+}
+
+.shoplens-product-card {
+  display: flex;
+  align-items: flex-start;
+  padding: 10px 14px;
+  gap: 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  text-decoration: none;
+}
+
+.shoplens-product-card:last-child {
+  border-bottom: none;
+}
+
+.shoplens-product-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.shoplens-product-thumb {
+  width: 56px;
+  height: 56px;
+  min-width: 56px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.shoplens-product-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shoplens-product-title {
+  color: #f0efe8;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.shoplens-product-price {
+  color: #e8593c;
+  font-size: 13px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.shoplens-product-source {
+  color: #888780;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.shoplens-shop-btn {
+  display: block;
+  width: 100%;
+  background: #e8593c;
+  color: white;
+  border: none;
+  border-radius: 0 0 16px 16px;
+  padding: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.15s;
+  letter-spacing: 0.02em;
+}
+
+.shoplens-shop-btn:hover {
+  background: #d44e33;
+}
+
+.shoplens-toast {
+  position: fixed;
+  bottom: 140px;
+  right: 16px;
+  background: rgba(10, 10, 15, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px 16px;
+  color: #f0efe8;
+  font-size: 13px;
+  z-index: 99999;
+  animation: shoplens-fadeInOut 2.5s ease forwards;
+  font-family: system-ui, -apple-system, sans-serif;
+  pointer-events: none;
+}
+
+@keyframes shoplens-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 4px 16px rgba(232, 89, 60, 0.4);
+  }
+  50% {
+    transform: scale(0.94);
+    box-shadow: 0 4px 24px rgba(232, 89, 60, 0.7);
+  }
+}
+
+@keyframes shoplens-fadeInOut {
+  0% { opacity: 0; transform: translateY(8px); }
+  15% { opacity: 1; transform: translateY(0); }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
+}
