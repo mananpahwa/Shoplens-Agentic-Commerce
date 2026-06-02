@@ -64,16 +64,36 @@ class ShopLensAnalyzer:
             cropped_pil.save(buf, format="JPEG", quality=85)
             cropped_bytes = buf.getvalue()
 
-            # Upload to 0x0.st
-            upload_resp = requests.post(
-                "https://0x0.st",
-                files={"file": ("image.jpg", cropped_bytes, "image/jpeg")},
-                timeout=30,
-            )
-            if upload_resp.status_code != 200:
-                return {"products": [], "error": "image_upload_failed"}
+            # Upload image to a public host so SerpApi can fetch it.
+            # Try catbox.moe first (reliable with cloud IPs), fall back to 0x0.st.
+            image_url = None
 
-            image_url = upload_resp.text.strip()
+            try:
+                r = requests.post(
+                    "https://catbox.moe/user/api.php",
+                    data={"reqtype": "fileupload"},
+                    files={"fileToUpload": ("image.jpg", cropped_bytes, "image/jpeg")},
+                    timeout=30,
+                )
+                if r.status_code == 200 and r.text.strip().startswith("https://"):
+                    image_url = r.text.strip()
+            except Exception:
+                pass
+
+            if not image_url:
+                try:
+                    r = requests.post(
+                        "https://0x0.st",
+                        files={"file": ("image.jpg", cropped_bytes, "image/jpeg")},
+                        timeout=30,
+                    )
+                    if r.status_code == 200:
+                        image_url = r.text.strip()
+                except Exception:
+                    pass
+
+            if not image_url:
+                return {"products": [], "error": "image_upload_failed"}
 
             # SerpApi Google Lens
             serpapi_key = os.environ["SERPAPI_KEY"]
