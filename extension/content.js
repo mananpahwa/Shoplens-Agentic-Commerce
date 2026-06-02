@@ -112,7 +112,6 @@ function renderPanel(products) {
     });
   });
 
-  setTimeout(() => closePanel(), 45000);
 }
 
 // ─── PART D: FRAME CAPTURE AND SEND ──────────────────────────────────────────
