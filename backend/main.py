@@ -65,9 +65,11 @@ class ShopLensAnalyzer:
             cropped_bytes = buf.getvalue()
 
             # Upload image to a public host so SerpApi can fetch it.
-            # Try catbox.moe first (reliable with cloud IPs), fall back to 0x0.st.
+            # Try multiple hosts in order — some block cloud datacenter IPs.
             image_url = None
+            upload_log = []
 
+            # Host 1: catbox.moe
             try:
                 r = requests.post(
                     "https://catbox.moe/user/api.php",
@@ -75,11 +77,48 @@ class ShopLensAnalyzer:
                     files={"fileToUpload": ("image.jpg", cropped_bytes, "image/jpeg")},
                     timeout=30,
                 )
+                upload_log.append(f"catbox={r.status_code}:{r.text.strip()[:80]}")
                 if r.status_code == 200 and r.text.strip().startswith("https://"):
                     image_url = r.text.strip()
-            except Exception:
-                pass
+            except Exception as e:
+                upload_log.append(f"catbox=err:{str(e)[:50]}")
 
+            # Host 2: tmpfiles.org
+            if not image_url:
+                try:
+                    r = requests.post(
+                        "https://tmpfiles.org/api/v1/upload",
+                        files={"file": ("image.jpg", cropped_bytes, "image/jpeg")},
+                        timeout=30,
+                    )
+                    upload_log.append(f"tmpfiles={r.status_code}:{r.text.strip()[:80]}")
+                    if r.status_code == 200:
+                        data = r.json()
+                        raw_url = data.get("data", {}).get("url", "")
+                        if raw_url:
+                            # tmpfiles page URL → direct download URL
+                            image_url = raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+                except Exception as e:
+                    upload_log.append(f"tmpfiles=err:{str(e)[:50]}")
+
+            # Host 3: uguu.se
+            if not image_url:
+                try:
+                    r = requests.post(
+                        "https://uguu.se/upload.php",
+                        files={"files[]": ("image.jpg", cropped_bytes, "image/jpeg")},
+                        timeout=30,
+                    )
+                    upload_log.append(f"uguu={r.status_code}:{r.text.strip()[:80]}")
+                    if r.status_code == 200:
+                        data = r.json()
+                        files = data.get("files", [])
+                        if files and files[0].get("url"):
+                            image_url = files[0]["url"]
+                except Exception as e:
+                    upload_log.append(f"uguu=err:{str(e)[:50]}")
+
+            # Host 4: 0x0.st
             if not image_url:
                 try:
                     r = requests.post(
@@ -87,13 +126,14 @@ class ShopLensAnalyzer:
                         files={"file": ("image.jpg", cropped_bytes, "image/jpeg")},
                         timeout=30,
                     )
+                    upload_log.append(f"0x0={r.status_code}:{r.text.strip()[:80]}")
                     if r.status_code == 200:
                         image_url = r.text.strip()
-                except Exception:
-                    pass
+                except Exception as e:
+                    upload_log.append(f"0x0=err:{str(e)[:50]}")
 
             if not image_url:
-                return {"products": [], "error": "image_upload_failed"}
+                return {"products": [], "error": f"upload_failed: {upload_log}"}
 
             # SerpApi Google Lens
             serpapi_key = os.environ["SERPAPI_KEY"]
