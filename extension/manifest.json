@@ -4,7 +4,7 @@
   "short_name": "ShopLens",
   "version": "1.0.0",
   "description": "See something you like on YouTube Shorts? Click once — AI finds it on Myntra, Flipkart, and Amazon.in.",
-  "permissions": ["storage", "activeTab"],
+  "permissions": ["storage", "activeTab", "alarms"],
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://serpapi.com/*",

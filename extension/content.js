@@ -200,42 +200,29 @@ async function triggerAnalysis() {
   console.log('[ShopLens] imageB64 length: ' + imageB64.length);
   console.log('[ShopLens] Sending to background...');
 
-  // Use a persistent port connection so the service worker stays alive
-  // for the full duration of the Modal fetch (cold starts can take 30-50s).
-  let port;
-  try {
-    port = chrome.runtime.connect({ name: 'shoplens-analysis' });
-  } catch (err) {
-    console.log('[ShopLens] Connect error:', err.message);
-    showToast('Try again in a moment');
-    resetButton();
-    return;
-  }
-
-  port.postMessage({ type: 'ANALYZE_FRAME', imageB64 });
-  console.log('[ShopLens] Message sent via port');
-
-  port.onMessage.addListener((message) => {
-    if (message.type === 'PRODUCTS_RESULT') {
-      port.disconnect();
-      resetButton();
-      if (!message.products || message.products.length === 0) {
-        showToast('Nothing found — try a clearer frame');
-        return;
-      }
-      renderPanel(message.products);
-    }
-  });
-
-  port.onDisconnect.addListener(() => {
-    const err = chrome.runtime.lastError;
-    if (err) {
-      console.log('[ShopLens] Port disconnected with error:', err.message);
+  chrome.runtime.sendMessage({ type: 'ANALYZE_FRAME', imageB64 }, (response) => {
+    if (chrome.runtime.lastError) {
+      console.log('[ShopLens] Send error:', chrome.runtime.lastError.message);
       showToast('Try again in a moment');
       resetButton();
+      return;
     }
+    console.log('[ShopLens] Message acknowledged by SW');
   });
 }
+
+// ─── PART E: RECEIVE RESULTS ─────────────────────────────────────────────────
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === 'PRODUCTS_RESULT') {
+    resetButton();
+    if (!message.products || message.products.length === 0) {
+      showToast('Nothing found — try a clearer frame');
+      return;
+    }
+    renderPanel(message.products);
+  }
+});
 
 // ─── PART B: BUTTON INJECTION ─────────────────────────────────────────────────
 
