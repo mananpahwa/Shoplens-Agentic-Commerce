@@ -7,8 +7,10 @@ from PIL import Image
 
 app = modal.App("shoplens-backend")
 
-image = modal.Image.debian_slim().pip_install(
-    "ultralytics", "pillow", "requests", "fastapi[standard]", "python-multipart"
+image = (
+    modal.Image.debian_slim()
+    .apt_install("libgl1-mesa-glx", "libglib2.0-0")
+    .pip_install("ultralytics", "pillow", "requests", "fastapi[standard]", "python-multipart")
 )
 
 
