@@ -1,5 +1,5 @@
 // ShopLens Background Service Worker
-const MODAL_ENDPOINT = "https://manaan-pahwa--shoplens-backend-analyze.modal.run";
+const MODAL_ENDPOINT = "https://manaan-pahwa--shoplens-backend-shoplensanalyzer-analyze.modal.run";
 
 // Use persistent port connections (chrome.runtime.connect) instead of sendMessage.
 // Ports keep the service worker alive for the full duration of the Modal fetch,
