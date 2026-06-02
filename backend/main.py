@@ -154,13 +154,28 @@ class ShopLensAnalyzer:
             except Exception:
                 return {"products": []}
 
-            # SerpApi returns results under "visual_matches", not "products"
-            raw_products = (
-                lens_data.get("visual_matches")
-                or lens_data.get("shopping_results")
-                or lens_data.get("products")
-                or []
-            )
+            # Priority 1: shopping_results — actual product cards with prices
+            # Priority 2: visual_matches filtered to known Indian e-commerce domains
+            # Never return social media, news, or general web pages.
+
+            SHOPPING_DOMAINS = [
+                "flipkart.com", "myntra.com", "amazon.in", "amazon.com",
+                "meesho.com", "ajio.com", "nykaa.com", "snapdeal.com",
+                "tatacliq.com", "reliancetrends.com", "westside.com",
+                "limeroad.com", "koovs.com", "jabong.com", "shopclues.com",
+                "shein.in", "zara.com", "hm.com", "uniqlo.com",
+                "bewakoof.com", "urbanic.com", "virgio.com",
+            ]
+
+            raw_products = lens_data.get("shopping_results") or []
+
+            if not raw_products:
+                # Fall back to visual_matches but only keep shopping domain links
+                all_matches = lens_data.get("visual_matches") or []
+                raw_products = [
+                    p for p in all_matches
+                    if any(domain in p.get("link", "") for domain in SHOPPING_DOMAINS)
+                ]
 
             formatted = []
             for p in raw_products[:3]:
