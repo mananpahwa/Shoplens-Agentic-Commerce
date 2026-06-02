@@ -200,15 +200,21 @@ async function triggerAnalysis() {
   console.log('[ShopLens] imageB64 length: ' + imageB64.length);
   console.log('[ShopLens] Sending to background...');
 
-  chrome.runtime.sendMessage({ type: 'ANALYZE_FRAME', imageB64 }, (response) => {
-    if (chrome.runtime.lastError) {
-      console.log('[ShopLens] Send error:', chrome.runtime.lastError.message);
-      showToast('Try again in a moment');
-      resetButton();
-      return;
-    }
-    console.log('[ShopLens] Message acknowledged by SW');
-  });
+  try {
+    chrome.runtime.sendMessage({ type: 'ANALYZE_FRAME', imageB64 }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.log('[ShopLens] Send error:', chrome.runtime.lastError.message);
+        showToast('Refresh the page (Cmd+R) then try again');
+        resetButton();
+        return;
+      }
+      console.log('[ShopLens] Message acknowledged by SW');
+    });
+  } catch (err) {
+    console.log('[ShopLens] sendMessage threw:', err.message);
+    showToast('Refresh the page (Cmd+R) then try again');
+    resetButton();
+  }
 }
 
 // ─── PART E: RECEIVE RESULTS ─────────────────────────────────────────────────
