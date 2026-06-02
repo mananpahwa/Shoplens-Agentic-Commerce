@@ -42,6 +42,7 @@ async function handleAnalysis(imageB64, tabId) {
     }
 
     const data = await response.json();
+    console.log('[ShopLens] Modal response body:', JSON.stringify(data));
     const products = data.products || [];
 
     safeSendMessage(tabId, {
