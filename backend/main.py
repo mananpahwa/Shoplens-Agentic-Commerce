@@ -85,7 +85,14 @@ def analyze(item: dict):
         except Exception:
             return {"products": []}
 
-        raw_products = lens_data.get("products", [])
+        # SerpApi Google Lens returns results under "visual_matches" (not "products").
+        # Fall back through all known keys so the pipeline survives API changes.
+        raw_products = (
+            lens_data.get("visual_matches")
+            or lens_data.get("shopping_results")
+            or lens_data.get("products")
+            or []
+        )
 
         # Step 7: Format and return max 3 products
         formatted = []
@@ -93,12 +100,25 @@ def analyze(item: dict):
             title = p.get("title", "")
             if len(title) > 60:
                 title = title[:57] + "..."
+
+            # Price may be a string ("₹1299") or a dict ({"value": "₹1299"})
+            price = p.get("price", "")
+            if isinstance(price, dict):
+                price = price.get("value") or price.get("extracted_price") or ""
+
+            link = p.get("link", "")
+            thumbnail = p.get("thumbnail", "")
+
+            # Skip items with no link or title — they're noise
+            if not title or not link:
+                continue
+
             formatted.append({
                 "title": title,
-                "link": p.get("link", ""),
+                "link": link,
                 "source": p.get("source", ""),
-                "price": p.get("price", ""),
-                "thumbnail": p.get("thumbnail", ""),
+                "price": str(price) if price else "",
+                "thumbnail": thumbnail,
             })
 
         return {"products": formatted}
