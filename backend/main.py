@@ -34,6 +34,12 @@ SOCIAL_DOMAINS = {
     "x.com", "tiktok.com", "pinterest.com", "youtube.com",
     "snapchat.com", "tumblr.com", "linkedin.com",
 }
+# Non-Indian e-commerce — penalised so they only appear when no Indian results exist
+WESTERN_DOMAINS = {
+    "amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de", "amazon.fr",
+    "amazon.co.jp", "amazon.com.au", "etsy.com", "ebay.com", "walmart.com",
+    "target.com", "nordstrom.com", "macys.com",
+}
 GARMENT_LABELS = [
     "kurta", "salwar kameez", "saree", "lehenga", "anarkali",
     "dress", "jeans", "trousers", "shirt", "t-shirt",
@@ -215,10 +221,14 @@ class ShopLensAnalyzer:
             if any(d in link for d in SOCIAL_DOMAINS):
                 continue
             score = SRC_BOOST.get(p.get("_src", ""), 0)
-            for domain, boost in INDIAN_BOOST.items():
-                if domain in link:
-                    score += boost
-                    break
+            # Western non-Indian domains get a penalty so they rank below all Indian results
+            if any(d in link for d in WESTERN_DOMAINS):
+                score -= 2
+            else:
+                for domain, boost in INDIAN_BOOST.items():
+                    if domain in link:
+                        score += boost
+                        break
             if p.get("price"):
                 score += 1
             scored.append((score, p))
