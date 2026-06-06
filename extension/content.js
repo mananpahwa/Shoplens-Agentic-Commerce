@@ -3,7 +3,6 @@
 // ─── PART A: STATE ───────────────────────────────────────────────────────────
 let isLoading = false;
 let panelVisible = false;
-let dismissedThisSession = [];
 
 // ─── PART G: UTILITY FUNCTIONS ───────────────────────────────────────────────
 
@@ -49,7 +48,7 @@ function closePanel() {
 
 // ─── PART F: RENDER OVERLAY PANEL ────────────────────────────────────────────
 
-function renderPanel(products) {
+function renderPanel(products, garmentLabel) {
   const existing = document.querySelector('.shoplens-panel');
   if (existing) existing.remove();
 
@@ -60,8 +59,14 @@ function renderPanel(products) {
 
   const header = document.createElement('div');
   header.className = 'shoplens-panel-header';
+  const chip = garmentLabel
+    ? `<span class="shoplens-garment-chip">${escapeHtml(garmentLabel)}</span>`
+    : '';
   header.innerHTML = `
-    <span class="shoplens-panel-title">ShopLens</span>
+    <div class="shoplens-header-left">
+      <span class="shoplens-panel-title">ShopLens</span>
+      ${chip}
+    </div>
     <button class="shoplens-close-btn">✕</button>
   `;
   header.querySelector('.shoplens-close-btn').addEventListener('click', closePanel);
@@ -69,8 +74,7 @@ function renderPanel(products) {
   const list = document.createElement('div');
   list.className = 'shoplens-products-list';
 
-  const maxProducts = products.slice(0, 3);
-  maxProducts.forEach((product) => {
+  products.slice(0, 6).forEach((product) => {
     const card = document.createElement('div');
     card.className = 'shoplens-product-card';
     card.innerHTML = `
@@ -92,18 +96,8 @@ function renderPanel(products) {
     list.appendChild(card);
   });
 
-  const shopBtn = document.createElement('button');
-  shopBtn.className = 'shoplens-shop-btn';
-  shopBtn.textContent = 'Shop Now →';
-  shopBtn.addEventListener('click', () => {
-    if (maxProducts.length > 0 && maxProducts[0].link) {
-      window.open(maxProducts[0].link, '_blank');
-    }
-  });
-
   panel.appendChild(header);
   panel.appendChild(list);
-  panel.appendChild(shopBtn);
   document.body.appendChild(panel);
 
   requestAnimationFrame(() => {
@@ -111,18 +105,11 @@ function renderPanel(products) {
       panel.classList.add('visible');
     });
   });
-
 }
 
 // ─── PART D: FRAME CAPTURE AND SEND ──────────────────────────────────────────
 
-// Captures a JPEG frame from the video element as a pure base64 string.
-// Uses ImageCapture API (Method 1) to bypass cross-origin canvas taint on
-// YouTube videos (served from googlevideo.com). Falls back to direct canvas
-// draw (Method 2) for browsers without ImageCapture support.
 async function captureFrame(video) {
-  // Method 1: ImageCapture API — grabs an ImageBitmap from the video stream.
-  // ImageBitmap obtained this way is NOT tainted, so toDataURL() works.
   if ('ImageCapture' in window) {
     let stream = null;
     let track = null;
@@ -136,8 +123,7 @@ async function captureFrame(video) {
         const canvas = document.createElement('canvas');
         canvas.width = bitmap.width;
         canvas.height = bitmap.height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(bitmap, 0, 0);
+        canvas.getContext('2d').drawImage(bitmap, 0, 0);
         bitmap.close();
 
         const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
@@ -152,14 +138,11 @@ async function captureFrame(video) {
     }
   }
 
-  // Method 2: Direct canvas draw — works if the browser doesn't enforce taint
-  // for this context (some Chromium builds / extension contexts allow it).
   try {
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth || 1280;
     canvas.height = video.videoHeight || 720;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
     console.log('[ShopLens] Captured via direct canvas draw');
     return dataUrl.split(',')[1];
@@ -190,7 +173,7 @@ async function triggerAnalysis() {
   const imageB64 = await captureFrame(video);
 
   if (!imageB64 || imageB64.length < 100) {
-    console.log('[ShopLens] imageB64 is empty or too short — all capture methods failed');
+    console.log('[ShopLens] imageB64 is empty or too short');
     showToast('Could not capture frame — try again');
     resetButton();
     return;
@@ -225,7 +208,7 @@ chrome.runtime.onMessage.addListener((message) => {
       showToast('Nothing found — try a clearer frame');
       return;
     }
-    renderPanel(message.products);
+    renderPanel(message.products, message.garment_label || '');
   }
 });
 
@@ -274,7 +257,6 @@ const observer = new MutationObserver(() => {
 });
 observer.observe(document.body, { subtree: true, childList: true });
 
-// Initial injection if already on a Shorts URL
 if (location.href.includes('/shorts/')) {
   injectButton();
 }

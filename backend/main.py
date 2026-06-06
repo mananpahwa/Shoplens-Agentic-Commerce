@@ -10,11 +10,42 @@ app = modal.App("shoplens-backend")
 image = (
     modal.Image.debian_slim()
     .apt_install("libgl1-mesa-glx", "libglib2.0-0")
-    .pip_install("ultralytics", "pillow", "requests", "fastapi[standard]", "python-multipart")
-    # Pre-download YOLO model into the image at build time.
-    # Without this, every cold start downloads ~6MB from internet, adding 30-60s.
-    .run_commands("python -c 'from ultralytics import YOLO; YOLO(\"yolo11n.pt\")'")
+    .pip_install(
+        "ultralytics", "pillow", "requests",
+        "fastapi[standard]", "python-multipart", "transformers"
+    )
+    .run_commands(
+        "python -c 'from ultralytics import YOLO; YOLO(\"yolo11n.pt\")'",
+        "python -c 'from transformers import CLIPModel, CLIPProcessor; "
+        "CLIPModel.from_pretrained(\"patrickjohncyh/fashion-clip\"); "
+        "CLIPProcessor.from_pretrained(\"patrickjohncyh/fashion-clip\")'"
+    )
 )
+
+INDIAN_BOOST = {
+    "flipkart.com": 3, "myntra.com": 3, "amazon.in": 3,
+    "meesho.com": 2, "ajio.com": 2, "nykaa.com": 2,
+    "snapdeal.com": 1, "tatacliq.com": 1, "bewakoof.com": 1,
+    "reliancetrends.com": 1, "westside.com": 1,
+    "zara.com": 1, "hm.com": 1, "uniqlo.com": 1,
+}
+SOCIAL_DOMAINS = {
+    "reddit.com", "instagram.com", "facebook.com", "twitter.com",
+    "x.com", "tiktok.com", "pinterest.com", "youtube.com",
+    "snapchat.com", "tumblr.com", "linkedin.com",
+}
+GARMENT_LABELS = [
+    "kurta", "salwar kameez", "saree", "lehenga", "anarkali",
+    "dress", "jeans", "trousers", "shirt", "t-shirt",
+    "jacket", "blazer", "skirt", "shorts", "ethnic wear",
+]
+COLOR_PALETTE = {
+    "red": [210, 50, 50], "pink": [230, 100, 150], "orange": [230, 130, 50],
+    "yellow": [220, 200, 60], "green": [60, 150, 60], "blue": [50, 100, 200],
+    "navy": [30, 50, 120], "purple": [130, 60, 190], "white": [230, 230, 230],
+    "black": [30, 30, 30], "grey": [128, 128, 128], "beige": [210, 190, 150],
+    "brown": [130, 80, 50], "maroon": [128, 0, 50],
+}
 
 
 @app.cls(image=image, gpu="T4", secrets=[modal.Secret.from_dotenv()])
@@ -22,9 +53,193 @@ class ShopLensAnalyzer:
 
     @modal.enter()
     def load_model(self):
-        # Runs once when the container starts — model stays in memory across requests.
         from ultralytics import YOLO
-        self.model = YOLO("yolo11n.pt")
+        from transformers import CLIPModel, CLIPProcessor
+        import torch
+        self.yolo = YOLO("yolo11n.pt")
+        self.clip_model = CLIPModel.from_pretrained("patrickjohncyh/fashion-clip")
+        self.clip_processor = CLIPProcessor.from_pretrained("patrickjohncyh/fashion-clip")
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.clip_model.to(self.device)
+        self.clip_model.eval()
+        print(f"[ShopLens] Models loaded on {self.device}")
+
+    def classify_garment(self, pil_image):
+        import torch
+        inputs = self.clip_processor(
+            text=GARMENT_LABELS, images=pil_image,
+            return_tensors="pt", padding=True
+        ).to(self.device)
+        with torch.no_grad():
+            probs = self.clip_model(**inputs).logits_per_image.softmax(dim=1)[0]
+        top_idx = int(probs.argmax())
+        label = GARMENT_LABELS[top_idx]
+        score = float(probs[top_idx])
+        print(f"[ShopLens] Garment: {label} ({score:.2f})")
+        return label
+
+    def dominant_color(self, pil_image):
+        import numpy as np
+        pixels = np.array(pil_image.resize((50, 50))).reshape(-1, 3).astype(float)
+        mean = pixels.mean(axis=0)
+        color = min(
+            COLOR_PALETTE,
+            key=lambda c: sum((mean[i] - COLOR_PALETTE[c][i]) ** 2 for i in range(3))
+        )
+        print(f"[ShopLens] Color: {color}")
+        return color
+
+    def upload_image(self, image_bytes):
+        image_url = None
+        log = []
+
+        try:
+            r = requests.post(
+                "https://catbox.moe/user/api.php",
+                data={"reqtype": "fileupload"},
+                files={"fileToUpload": ("image.jpg", image_bytes, "image/jpeg")},
+                timeout=30,
+            )
+            log.append(f"catbox={r.status_code}")
+            if r.status_code == 200 and r.text.strip().startswith("https://"):
+                image_url = r.text.strip()
+        except Exception as e:
+            log.append(f"catbox=err:{str(e)[:40]}")
+
+        if not image_url:
+            try:
+                r = requests.post(
+                    "https://tmpfiles.org/api/v1/upload",
+                    files={"file": ("image.jpg", image_bytes, "image/jpeg")},
+                    timeout=30,
+                )
+                log.append(f"tmpfiles={r.status_code}")
+                if r.status_code == 200:
+                    raw_url = r.json().get("data", {}).get("url", "")
+                    if raw_url:
+                        image_url = raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+            except Exception as e:
+                log.append(f"tmpfiles=err:{str(e)[:40]}")
+
+        if not image_url:
+            try:
+                r = requests.post(
+                    "https://uguu.se/upload.php",
+                    files={"files[]": ("image.jpg", image_bytes, "image/jpeg")},
+                    timeout=30,
+                )
+                log.append(f"uguu={r.status_code}")
+                if r.status_code == 200:
+                    files = r.json().get("files", [])
+                    if files and files[0].get("url"):
+                        image_url = files[0]["url"]
+            except Exception as e:
+                log.append(f"uguu=err:{str(e)[:40]}")
+
+        if not image_url:
+            try:
+                r = requests.post(
+                    "https://0x0.st",
+                    files={"file": ("image.jpg", image_bytes, "image/jpeg")},
+                    timeout=30,
+                )
+                log.append(f"0x0={r.status_code}")
+                if r.status_code == 200:
+                    image_url = r.text.strip()
+            except Exception as e:
+                log.append(f"0x0=err:{str(e)[:40]}")
+
+        print(f"[ShopLens] Upload log: {log} → {'OK' if image_url else 'FAILED'}")
+        return image_url
+
+    def run_parallel_search(self, query, image_url, serpapi_key):
+        from concurrent.futures import ThreadPoolExecutor
+
+        def google_shopping():
+            try:
+                r = requests.get(
+                    "https://serpapi.com/search",
+                    params={
+                        "engine": "google_shopping",
+                        "q": query,
+                        "gl": "in",
+                        "hl": "en",
+                        "api_key": serpapi_key,
+                    },
+                    timeout=30,
+                )
+                results = r.json().get("shopping_results", [])
+                print(f"[ShopLens] Google Shopping '{query}': {len(results)} results")
+                return [{"_src": "shopping", **p} for p in results]
+            except Exception as e:
+                print(f"[ShopLens] Google Shopping error: {e}")
+                return []
+
+        def google_lens():
+            if not image_url:
+                print("[ShopLens] Lens skipped — upload failed")
+                return []
+            try:
+                r = requests.get(
+                    "https://serpapi.com/search",
+                    params={
+                        "engine": "google_lens",
+                        "url": image_url,
+                        "gl": "in",
+                        "hl": "en",
+                        "api_key": serpapi_key,
+                    },
+                    timeout=30,
+                )
+                data = r.json()
+                shopping = [{"_src": "lens_shopping", **p} for p in data.get("shopping_results", [])]
+                visual = [{"_src": "lens_visual", **p} for p in data.get("visual_matches", [])]
+                print(f"[ShopLens] Google Lens: {len(shopping)} shopping, {len(visual)} visual")
+                return shopping + visual
+            except Exception as e:
+                print(f"[ShopLens] Google Lens error: {e}")
+                return []
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            f_shopping = executor.submit(google_shopping)
+            f_lens = executor.submit(google_lens)
+            return f_shopping.result() + f_lens.result()
+
+    def merge_and_score(self, all_results):
+        SRC_BOOST = {"lens_shopping": 3, "lens_visual": 1, "shopping": 0}
+        scored = []
+        for p in all_results:
+            link = p.get("link", "")
+            if not link:
+                continue
+            if any(d in link for d in SOCIAL_DOMAINS):
+                continue
+            score = SRC_BOOST.get(p.get("_src", ""), 0)
+            for domain, boost in INDIAN_BOOST.items():
+                if domain in link:
+                    score += boost
+                    break
+            if p.get("price"):
+                score += 1
+            scored.append((score, p))
+
+        scored.sort(key=lambda x: -x[0])
+
+        seen_urls, domain_counts, final = set(), {}, []
+        for score, p in scored:
+            link = p.get("link", "")
+            if link in seen_urls:
+                continue
+            seen_urls.add(link)
+            domain = next((d for d in INDIAN_BOOST if d in link), "other")
+            if domain_counts.get(domain, 0) >= 2:
+                continue
+            domain_counts[domain] = domain_counts.get(domain, 0) + 1
+            final.append(p)
+            if len(final) == 6:
+                break
+
+        return final
 
     @modal.fastapi_endpoint(method="POST")
     def analyze(self, item: dict):
@@ -35,162 +250,56 @@ class ShopLensAnalyzer:
             if not image_b64:
                 return {"products": [], "error": "no image provided"}
 
-            # Decode base64 → PIL Image
             img_bytes = base64.b64decode(image_b64)
             pil_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
             img_array = np.array(pil_image)
 
-            # YOLO person detection — model already loaded in memory
-            results = self.model(img_array, conf=0.55, classes=[0], verbose=False)
-
+            # YOLO person detection — crop to largest bounding box
+            results = self.yolo(img_array, conf=0.55, classes=[0], verbose=False)
             cropped = img_array
             if results and len(results[0].boxes) > 0:
                 boxes = results[0].boxes
-                areas = []
-                for box in boxes:
-                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-                    areas.append((x2 - x1) * (y2 - y1))
-                largest_idx = areas.index(max(areas))
-                largest_box = boxes[largest_idx]
-                x1, y1, x2, y2 = largest_box.xyxy[0].cpu().numpy().astype(int)
+                areas = [
+                    (b.xyxy[0][2] - b.xyxy[0][0]) * (b.xyxy[0][3] - b.xyxy[0][1])
+                    for b in boxes
+                ]
+                lb = boxes[areas.index(max(areas))]
+                x1, y1, x2, y2 = lb.xyxy[0].cpu().numpy().astype(int)
                 h, w = img_array.shape[:2]
-                x1, y1 = max(0, x1), max(0, y1)
-                x2, y2 = min(w, x2), min(h, y2)
-                cropped = img_array[y1:y2, x1:x2]
+                cropped = img_array[max(0,y1):min(h,y2), max(0,x1):min(w,x2)]
+                print(f"[ShopLens] Person crop: {x2-x1}x{y2-y1}px")
 
-            # Convert to JPEG bytes
             cropped_pil = Image.fromarray(cropped)
+
+            # Path A inputs: FashionCLIP → garment label + color → search query
+            garment = self.classify_garment(cropped_pil)
+            color = self.dominant_color(cropped_pil)
+            query = f"{color} {garment}"
+            print(f"[ShopLens] Query: '{query}'")
+
+            # Path B inputs: encode crop to JPEG → upload for Lens URL
             buf = io.BytesIO()
             cropped_pil.save(buf, format="JPEG", quality=85)
-            cropped_bytes = buf.getvalue()
+            image_url = self.upload_image(buf.getvalue())
 
-            # Upload image to a public host so SerpApi can fetch it.
-            # Try multiple hosts in order — some block cloud datacenter IPs.
-            image_url = None
-            upload_log = []
-
-            # Host 1: catbox.moe
-            try:
-                r = requests.post(
-                    "https://catbox.moe/user/api.php",
-                    data={"reqtype": "fileupload"},
-                    files={"fileToUpload": ("image.jpg", cropped_bytes, "image/jpeg")},
-                    timeout=30,
-                )
-                upload_log.append(f"catbox={r.status_code}:{r.text.strip()[:80]}")
-                if r.status_code == 200 and r.text.strip().startswith("https://"):
-                    image_url = r.text.strip()
-            except Exception as e:
-                upload_log.append(f"catbox=err:{str(e)[:50]}")
-
-            # Host 2: tmpfiles.org
-            if not image_url:
-                try:
-                    r = requests.post(
-                        "https://tmpfiles.org/api/v1/upload",
-                        files={"file": ("image.jpg", cropped_bytes, "image/jpeg")},
-                        timeout=30,
-                    )
-                    upload_log.append(f"tmpfiles={r.status_code}:{r.text.strip()[:80]}")
-                    if r.status_code == 200:
-                        data = r.json()
-                        raw_url = data.get("data", {}).get("url", "")
-                        if raw_url:
-                            # tmpfiles page URL → direct download URL
-                            image_url = raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-                except Exception as e:
-                    upload_log.append(f"tmpfiles=err:{str(e)[:50]}")
-
-            # Host 3: uguu.se
-            if not image_url:
-                try:
-                    r = requests.post(
-                        "https://uguu.se/upload.php",
-                        files={"files[]": ("image.jpg", cropped_bytes, "image/jpeg")},
-                        timeout=30,
-                    )
-                    upload_log.append(f"uguu={r.status_code}:{r.text.strip()[:80]}")
-                    if r.status_code == 200:
-                        data = r.json()
-                        files = data.get("files", [])
-                        if files and files[0].get("url"):
-                            image_url = files[0]["url"]
-                except Exception as e:
-                    upload_log.append(f"uguu=err:{str(e)[:50]}")
-
-            # Host 4: 0x0.st
-            if not image_url:
-                try:
-                    r = requests.post(
-                        "https://0x0.st",
-                        files={"file": ("image.jpg", cropped_bytes, "image/jpeg")},
-                        timeout=30,
-                    )
-                    upload_log.append(f"0x0={r.status_code}:{r.text.strip()[:80]}")
-                    if r.status_code == 200:
-                        image_url = r.text.strip()
-                except Exception as e:
-                    upload_log.append(f"0x0=err:{str(e)[:50]}")
-
-            if not image_url:
-                return {"products": [], "error": f"upload_failed: {upload_log}"}
-
-            # SerpApi Google Lens
+            # Run both paths in parallel
             serpapi_key = os.environ["SERPAPI_KEY"]
-            lens_resp = requests.get(
-                "https://serpapi.com/search",
-                params={
-                    "engine": "google_lens",
-                    "search_type": "products",
-                    "gl": "in",
-                    "hl": "en",
-                    "url": image_url,
-                    "api_key": serpapi_key,
-                },
-                timeout=30,
-            )
-            try:
-                lens_data = lens_resp.json()
-            except Exception:
-                return {"products": []}
+            all_results = self.run_parallel_search(query, image_url, serpapi_key)
+            print(f"[ShopLens] Total raw results: {len(all_results)}")
 
-            # Priority 1: shopping_results — actual product cards with prices
-            # Priority 2: visual_matches filtered to known Indian e-commerce domains
-            # Never return social media, news, or general web pages.
-
-            SHOPPING_DOMAINS = [
-                "flipkart.com", "myntra.com", "amazon.in", "amazon.com",
-                "meesho.com", "ajio.com", "nykaa.com", "snapdeal.com",
-                "tatacliq.com", "reliancetrends.com", "westside.com",
-                "limeroad.com", "koovs.com", "jabong.com", "shopclues.com",
-                "shein.in", "zara.com", "hm.com", "uniqlo.com",
-                "bewakoof.com", "urbanic.com", "virgio.com",
-            ]
-
-            raw_products = lens_data.get("shopping_results") or []
-
-            if not raw_products:
-                # Fall back to visual_matches but only keep shopping domain links
-                all_matches = lens_data.get("visual_matches") or []
-                raw_products = [
-                    p for p in all_matches
-                    if any(domain in p.get("link", "") for domain in SHOPPING_DOMAINS)
-                ]
+            top_products = self.merge_and_score(all_results)
 
             formatted = []
-            for p in raw_products[:3]:
+            for p in top_products:
                 title = p.get("title", "")
-                if len(title) > 60:
-                    title = title[:57] + "..."
-
-                price = p.get("price", "")
-                if isinstance(price, dict):
-                    price = price.get("value") or price.get("extracted_price") or ""
-
                 link = p.get("link", "")
                 if not title or not link:
                     continue
-
+                if len(title) > 60:
+                    title = title[:57] + "..."
+                price = p.get("price", "")
+                if isinstance(price, dict):
+                    price = price.get("value") or str(price.get("extracted_price", "")) or ""
                 formatted.append({
                     "title": title,
                     "link": link,
@@ -199,10 +308,13 @@ class ShopLensAnalyzer:
                     "thumbnail": p.get("thumbnail", ""),
                 })
 
-            return {"products": formatted}
+            print(f"[ShopLens] Returning {len(formatted)} products, garment={garment}")
+            return {"products": formatted, "garment_label": garment}
 
         except Exception as e:
-            return {"products": [], "error": str(e)[:100]}
+            import traceback
+            print(f"[ShopLens] Exception:\n{traceback.format_exc()}")
+            return {"products": [], "error": str(e)[:200]}
 
     @modal.fastapi_endpoint(method="GET")
     def health(self):
