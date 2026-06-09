@@ -254,6 +254,12 @@ class ShopLensAnalyzer:
             if any(pat in link_lower for pat in NON_SHOPPING_PATTERNS):
                 continue
 
+            # Lens visual_matches can return celebrity/news pages for any visually
+            # similar image. Only keep them if they come from a known shopping domain.
+            if p.get("_src") == "lens_visual":
+                if not any(d in link for d in INDIAN_BOOST):
+                    continue
+
             price_str = str(p.get("price", "") or "")
 
             # Hard block: foreign currency price
