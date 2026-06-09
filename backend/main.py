@@ -198,8 +198,9 @@ class ShopLensAnalyzer:
                 r = requests.get(
                     "https://serpapi.com/search",
                     params={
-                        "engine": "google_shopping",
+                        "engine": "google",
                         "q": q,
+                        "tbm": "shop",
                         "gl": "in",
                         "hl": "en",
                         "num": 20,
@@ -208,7 +209,7 @@ class ShopLensAnalyzer:
                     timeout=30,
                 )
                 results = r.json().get("shopping_results", [])
-                print(f"[ShopLens] Google Shopping '{q}': {len(results)} results")
+                print(f"[ShopLens] Google Shopping (tbm=shop) '{q}': {len(results)} results")
                 return [{"_src": "shopping", **p} for p in results]
             except Exception as e:
                 print(f"[ShopLens] Google Shopping error ({q}): {e}")
