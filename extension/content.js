@@ -77,13 +77,11 @@ function renderPanel(products, garmentLabel) {
   products.filter(p => p.link && p.link.startsWith('http')).slice(0, 20).forEach((product) => {
     const card = document.createElement('div');
     card.className = 'shoplens-product-card';
+    const thumbHtml = product.thumbnail
+      ? `<img class="shoplens-product-thumb" src="${escapeHtml(product.thumbnail)}" onerror="this.style.display='none'" alt="" />`
+      : `<div class="shoplens-product-thumb shoplens-thumb-empty"></div>`;
     card.innerHTML = `
-      <img
-        class="shoplens-product-thumb"
-        src="${escapeHtml(product.thumbnail)}"
-        onerror="this.style.background='#1a1a2e';this.src=''"
-        alt=""
-      />
+      ${thumbHtml}
       <div class="shoplens-product-info">
         <div class="shoplens-product-title">${escapeHtml(product.title)}</div>
         <div class="shoplens-product-price">${escapeHtml(product.price || '')}</div>

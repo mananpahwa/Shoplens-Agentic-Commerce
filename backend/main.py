@@ -77,14 +77,22 @@ BLOCKED_DOMAINS = {
     "etsy.com", "ebay.com", "ebay.co.uk",
     "walmart.com", "target.com", "nordstrom.com", "macys.com",
     "asos.com", "boohoo.com", "shein.com",
-    # Google's own pages — shopping results that link back to google.com are
-    # aggregation/comparison pages, not merchant product URLs
+    # Google's own pages
     "google.com",
-    # News, editorial, reference
+    # International news / editorial
     "wikipedia.org", "vogue.com", "harpersbazaar.com",
-    "elle.com", "cosmopolitan.com", "indiatoday.in",
-    "hindustantimes.com", "ndtv.com", "timesofindia.com",
-    "news18.com", "firstpost.com", "thehindu.com",
+    "elle.com", "cosmopolitan.com",
+    # Indian news (Google Lens often finds these when it recognises a person)
+    "indiatoday.in", "hindustantimes.com", "ndtv.com", "timesofindia.com",
+    "news18.com", "firstpost.com", "thehindu.com", "indianexpress.com",
+    "livemint.com", "businessinsider.in", "economictimes.com",
+    # Indian celebrity / entertainment gossip — Lens finds these for any known face
+    "mensxp.com", "scoopwhoop.com", "storypick.com", "vagabomb.com",
+    "bollywoodshaadis.com", "pinkvilla.com", "filmfare.com", "koimoi.com",
+    "bollywoodlife.com", "spotboye.com", "desimartini.com", "glamsham.com",
+    "odishatv.in", "jagranjunction.com", "navbharattimes.com",
+    "scroll.in", "thequint.com", "thewire.in", "theprint.in",
+    "mid-day.com", "dnaindia.com", "deccanherald.com",
 }
 
 # URL path patterns that indicate non-shopping pages
@@ -387,11 +395,11 @@ class ShopLensAnalyzer:
         sample_shopping = [p.get("link", "")[:80] for p in all_results if p.get("_src") == "shopping" and p.get("link")][:5]
         print(f"[ShopLens] Shopping URL samples: {sample_shopping}")
 
-        # lens_visual must outscore text shopping so visually matched results
-        # (which capture pattern/texture from the actual image) rank above
-        # generic text results ("brown shirt" finds any solid shirt, not plaid).
-        # lens_visual=4 + INDIAN_BOOST(myntra=3) = 7 → beats shopping=2 + boost=3 = 5
-        SRC_BOOST = {"lens_shopping": 5, "lens_visual": 4, "shopping": 2, "organic": 0}
+        # Lens results are based on the actual image and capture visual details
+        # (pattern, texture, cut) that text queries cannot express.
+        # Text shopping (score 1) is a fallback only — Lens always wins.
+        # lens_visual from INDIAN_BOOST = 4+3 = 7; shopping from INDIAN_BOOST = 1+3 = 4
+        SRC_BOOST = {"lens_shopping": 5, "lens_visual": 4, "shopping": 1, "organic": 0}
         blocks = {"blocked_domain": 0, "url_pattern": 0, "lens_visual_not_shopping": 0, "foreign_currency": 0}
         scored = []
         for p in all_results:
@@ -410,10 +418,19 @@ class ShopLensAnalyzer:
                 blocks["url_pattern"] += 1
                 continue
 
-            # Lens visual_matches can return celebrity/news pages for any visually
-            # similar image. Only keep them if they come from a known shopping domain.
+            # Lens visual_matches can return celebrity/news pages when Lens
+            # recognises the person in the frame. Block those via BLOCKED_DOMAINS
+            # (now includes all major Indian entertainment/news sites).
+            # Allow any domain NOT in the blocklist — smaller Indian retailers
+            # and international sites with Indian stores are both acceptable.
             if p.get("_src") == "lens_visual":
-                if not any(d in link for d in INDIAN_BOOST):
+                # Extra guard: URL must look like a product page, not a homepage
+                product_signals = ["/product", "/p/", "/dp/", "/item", "/buy",
+                                   "-shirt", "-kurta", "-dress", "-jacket",
+                                   "-top", "-pant", "-saree", "-kurti", "-suit"]
+                is_from_indian_store = any(d in link for d in INDIAN_BOOST)
+                has_product_url = any(s in link.lower() for s in product_signals)
+                if not is_from_indian_store and not has_product_url:
                     blocks["lens_visual_not_shopping"] += 1
                     continue
 
@@ -492,14 +509,12 @@ class ShopLensAnalyzer:
 
             cropped_pil = Image.fromarray(cropped)
 
-            # Path A inputs: FashionCLIP → garment label + color + pattern → query
+            # Path A inputs: FashionCLIP → garment label + color → search query
             garment, alt_garment = self.classify_garment(cropped_pil)
             color = self.dominant_color(cropped_pil)
-            pattern = self.detect_pattern(cropped_pil)
 
-            # Append gender for unambiguously gendered garments.
-            # Also suppress alt-query for menswear/womenswear to prevent
-            # cross-gender ethnic results flooding the panel.
+            # Append gender for unambiguously gendered garments and suppress
+            # alt-query to prevent cross-gender results (e.g. kurta alt for a shirt)
             if garment in MENS_GARMENTS:
                 gender_suffix = " men"
                 alt_garment = None
@@ -509,11 +524,8 @@ class ShopLensAnalyzer:
             else:
                 gender_suffix = ""  # kurta/ethnic wear is gender-neutral in India
 
-            # Build query: "brown checked shirt men" — pattern is the key
-            # visual detail that text search would otherwise miss entirely.
-            parts = [p for p in [color, pattern, garment] if p]
-            query = " ".join(parts) + gender_suffix
-            alt_query = (f"{color} {alt_garment}{gender_suffix}") if alt_garment else None
+            query = f"{color} {garment}{gender_suffix}"
+            alt_query = f"{color} {alt_garment}{gender_suffix}" if alt_garment else None
             print(f"[ShopLens] Query: '{query}'" + (f" + alt: '{alt_query}'" if alt_query else ""))
 
             # Path B inputs: encode crop to JPEG → upload for Lens URL

@@ -166,6 +166,15 @@
   background: rgba(255, 255, 255, 0.08);
 }
 
+.shoplens-thumb-empty {
+  width: 56px;
+  height: 56px;
+  min-width: 56px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
 .shoplens-product-info {
   flex: 1;
   min-width: 0;
