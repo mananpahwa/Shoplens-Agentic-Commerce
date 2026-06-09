@@ -22,6 +22,37 @@ image = (
     )
 )
 
+# Maps the SerpApi `source` field from Shopping results to a merchant search URL.
+# Google Shopping returns google.com catalog URLs in `link`; we replace them
+# with a real merchant search URL constructed from the query + source name.
+MERCHANT_SEARCH_URLS = {
+    "myntra":           "https://www.myntra.com/{}",
+    "flipkart":         "https://www.flipkart.com/search?q={}",
+    "amazon":           "https://www.amazon.in/s?k={}",
+    "meesho":           "https://www.meesho.com/search?q={}",
+    "ajio":             "https://www.ajio.com/search/?text={}",
+    "nykaa":            "https://www.nykaafashion.com/search?q={}",
+    "snapdeal":         "https://www.snapdeal.com/search?keyword={}",
+    "tata cliq":        "https://www.tatacliq.com/search/?q={}",
+    "tatacliq":         "https://www.tatacliq.com/search/?q={}",
+    "westside":         "https://www.westside.com/search?type=product&q={}",
+    "bewakoof":         "https://www.bewakoof.com/search/{}",
+    "biba":             "https://www.biba.in/search?q={}",
+    "fabindia":         "https://www.fabindia.com/search?q={}",
+    "libas":            "https://www.libas.in/search?q={}",
+    "aurelia":          "https://www.aurelia.in/search?q={}",
+    "h&m":              "https://www2.hm.com/en_in/search-results.html?q={}",
+    "zara":             "https://www.zara.com/in/en/search?searchTerm={}",
+    "limeroad":         "https://www.limeroad.com/search?q={}",
+    "pantaloons":       "https://www.pantaloons.com/search?q={}",
+    "max fashion":      "https://www.maxfashion.in/in/en/search?text={}",
+    "maxfashion":       "https://www.maxfashion.in/in/en/search?text={}",
+    "global desi":      "https://www.global-desi.com/search?q={}",
+    "virgio":           "https://www.virgio.com/search?q={}",
+    "reliance trends":  "https://www.reliancetrends.com/search?q={}",
+    "urbanic":          "https://www.urbanic.com/search?q={}",
+}
+
 # Known Indian + trusted international selling platforms → score boost
 INDIAN_BOOST = {
     "flipkart.com": 3, "myntra.com": 3, "amazon.in": 3,
@@ -192,8 +223,55 @@ class ShopLensAnalyzer:
 
     def run_parallel_search(self, query, image_url, serpapi_key, alt_query=None):
         from concurrent.futures import ThreadPoolExecutor
+        from urllib.parse import quote_plus
 
         def shopping_search(q):
+            """Google Shopping — returns thumbnail + price, but link is a google.com
+            catalog page. We replace those with real merchant search URLs derived
+            from the `source` field so buyers land on an actual store."""
+            try:
+                r = requests.get(
+                    "https://serpapi.com/search",
+                    params={
+                        "engine": "google_shopping",
+                        "q": q,
+                        "gl": "in",
+                        "hl": "en",
+                        "num": 20,
+                        "api_key": serpapi_key,
+                    },
+                    timeout=30,
+                )
+                raw = r.json().get("shopping_results", [])
+                results = []
+                q_enc = quote_plus(q)
+                for p in raw:
+                    link = p.get("link", "") or p.get("product_link", "")
+                    source_name = (p.get("source") or "").lower().strip()
+
+                    # If link is a google.com catalog page, replace with merchant search URL
+                    if not link or "google.com" in link:
+                        link = ""
+                        for key, url_tpl in MERCHANT_SEARCH_URLS.items():
+                            if key in source_name:
+                                link = url_tpl.format(q_enc)
+                                break
+
+                    if link:
+                        p["link"] = link
+                        results.append({"_src": "shopping", **p})
+
+                print(f"[ShopLens] Shopping '{q}': {len(results)} results")
+                sample = [p.get("link", "")[:70] for p in results[:3]]
+                print(f"[ShopLens] Shopping URL sample: {sample}")
+                return results
+            except Exception as e:
+                print(f"[ShopLens] Shopping error ({q}): {e}")
+                return []
+
+        def organic_search(q):
+            """Google organic results — always returns real merchant product URLs,
+            but no thumbnail or price. Used to supplement shopping results."""
             try:
                 r = requests.get(
                     "https://serpapi.com/search",
@@ -207,14 +285,11 @@ class ShopLensAnalyzer:
                     },
                     timeout=30,
                 )
-                data = r.json()
-                results = data.get("organic_results", [])
-                print(f"[ShopLens] Google Organic '{q}': {len(results)} results")
-                sample = [p.get("link", "")[:70] for p in results[:3]]
-                print(f"[ShopLens] Organic URL sample: {sample}")
-                return [{"_src": "shopping", **p} for p in results]
+                results = r.json().get("organic_results", [])
+                print(f"[ShopLens] Organic '{q}': {len(results)} results")
+                return [{"_src": "organic", **p} for p in results]
             except Exception as e:
-                print(f"[ShopLens] Google Organic error ({q}): {e}")
+                print(f"[ShopLens] Organic error ({q}): {e}")
                 return []
 
         def google_lens():
@@ -242,12 +317,18 @@ class ShopLensAnalyzer:
                 print(f"[ShopLens] Google Lens error: {e}")
                 return []
 
+        tasks = [
+            (shopping_search, query),
+            (organic_search, query),
+            (google_lens, None),
+        ]
+        if alt_query:
+            tasks.append((shopping_search, alt_query))
+
         futures = []
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures.append(executor.submit(shopping_search, query))
-            if alt_query:
-                futures.append(executor.submit(shopping_search, alt_query))
-            futures.append(executor.submit(google_lens))
+        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+            for fn, arg in tasks:
+                futures.append(executor.submit(fn) if arg is None else executor.submit(fn, arg))
             results = []
             for f in futures:
                 results.extend(f.result())
@@ -270,7 +351,8 @@ class ShopLensAnalyzer:
         sample_shopping = [p.get("link", "")[:80] for p in all_results if p.get("_src") == "shopping" and p.get("link")][:5]
         print(f"[ShopLens] Shopping URL samples: {sample_shopping}")
 
-        SRC_BOOST = {"lens_shopping": 3, "lens_visual": 1, "shopping": 0}
+        # shopping: has thumbnail+price → highest value; organic: real product URL but no image
+        SRC_BOOST = {"lens_shopping": 3, "lens_visual": 1, "shopping": 2, "organic": 0}
         blocks = {"blocked_domain": 0, "url_pattern": 0, "lens_visual_not_shopping": 0, "foreign_currency": 0}
         scored = []
         for p in all_results:
