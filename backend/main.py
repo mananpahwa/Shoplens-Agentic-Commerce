@@ -242,9 +242,18 @@ class ShopLensAnalyzer:
                 continue
 
             # lens_visual can return celebrity/news pages when Lens recognises
-            # a person in the frame. Only keep results from known Indian stores.
+            # a person in the frame. Celebrity/gossip sites are already covered
+            # by BLOCKED_DOMAINS above. As a second guard, require either a
+            # known Indian store domain OR a product-like URL pattern — this
+            # catches any remaining news/editorial pages not in the blocklist.
             if p.get("_src") == "lens_visual":
-                if not any(d in link for d in INDIAN_BOOST):
+                is_indian_store = any(d in link for d in INDIAN_BOOST)
+                has_product_url = any(s in link_lower for s in [
+                    "/product", "/p/", "/dp/", "/item", "/buy", "/shop",
+                    "-shirt", "-kurta", "-dress", "-jacket", "-top", "-kurti",
+                    "-pant", "-saree", "-suit", "-blazer", "-trouser", "-lehenga",
+                ])
+                if not is_indian_store and not has_product_url:
                     blocks["lens_visual_not_shopping"] += 1
                     continue
 
