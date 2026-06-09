@@ -22,23 +22,7 @@ image = (
     )
 )
 
-# Hard whitelist — only domains that actually sell products in India.
-# Anything not on this list is blocked before scoring.
-SELLING_DOMAINS = {
-    "flipkart.com", "myntra.com", "amazon.in",
-    "meesho.com", "ajio.com", "nykaa.com", "nykaafashion.com",
-    "snapdeal.com", "tatacliq.com", "bewakoof.com",
-    "reliancetrends.com", "westside.com", "limeroad.com",
-    "pantaloons.com", "maxfashion.in", "max-fashion.com", "centralonline.com",
-    "urbanic.com", "virgio.com", "global-desi.com",
-    "biba.in", "wforwoman.com", "fabindia.com",
-    "libas.in", "aurelia.in", "anokhi.com", "jaypore.com",
-    "perniaspopupshop.com", "indiaemporium.com",
-    "zara.com", "hm.com", "uniqlo.com", "mango.com",
-    "marksandspencer.com", "forever21.in",
-}
-
-# Score boosts for known Indian platforms within the whitelist
+# Known Indian + trusted international selling platforms → score boost
 INDIAN_BOOST = {
     "flipkart.com": 3, "myntra.com": 3, "amazon.in": 3,
     "meesho.com": 2, "ajio.com": 2, "nykaa.com": 2, "nykaafashion.com": 2,
@@ -47,13 +31,39 @@ INDIAN_BOOST = {
     "pantaloons.com": 1, "maxfashion.in": 1, "biba.in": 1,
     "fabindia.com": 1, "libas.in": 1, "aurelia.in": 1,
     "urbanic.com": 1, "virgio.com": 1, "global-desi.com": 1,
-    "zara.com": 1, "hm.com": 1, "uniqlo.com": 1,
+    "zara.com": 1, "hm.com": 1, "uniqlo.com": 1, "mango.com": 1,
 }
 
-# Price strings that confirm Indian rupee pricing → +2 boost
+# Hard-blocked domains — never useful to a buyer in India
+BLOCKED_DOMAINS = {
+    # Social media
+    "reddit.com", "instagram.com", "facebook.com", "twitter.com",
+    "x.com", "tiktok.com", "pinterest.com", "youtube.com",
+    "snapchat.com", "tumblr.com", "linkedin.com",
+    # Western-only e-commerce (no Indian store / INR pricing)
+    "amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de",
+    "amazon.fr", "amazon.co.jp", "amazon.com.au",
+    "etsy.com", "ebay.com", "ebay.co.uk",
+    "walmart.com", "target.com", "nordstrom.com", "macys.com",
+    "asos.com", "boohoo.com", "shein.com",
+    # News, editorial, reference
+    "wikipedia.org", "vogue.com", "harpersbazaar.com",
+    "elle.com", "cosmopolitan.com", "indiatoday.in",
+    "hindustantimes.com", "ndtv.com", "timesofindia.com",
+    "news18.com", "firstpost.com", "thehindu.com",
+}
+
+# URL path patterns that indicate non-shopping pages
+NON_SHOPPING_PATTERNS = [
+    "/article/", "/articles/", "/news/", "/blog/", "/blogs/",
+    "/editorial/", "/magazine/", "/watch?", "/post/",
+    "/story/", "/stories/", "/review/", "/reviews/",
+]
+
+# Price strings that confirm Indian rupee → +2 boost
 INR_MARKERS = {"₹", "Rs.", "Rs ", "INR"}
 
-# Price strings that indicate foreign currency → hard block regardless of domain
+# Price strings that indicate foreign currency → hard block
 FOREIGN_CURRENCY_MARKERS = {"US$", "USD", "CA$", "CAD", "AU$", "AUD", "£", "GBP", "€", "EUR", "US $", "C$"}
 GARMENT_LABELS = [
     "kurta", "salwar kameez", "saree", "lehenga", "anarkali",
@@ -235,19 +245,24 @@ class ShopLensAnalyzer:
             if not link:
                 continue
 
-            # Hard block: domain not in the selling whitelist (blocks news, blogs, social)
-            if not any(d in link for d in SELLING_DOMAINS):
+            # Hard block: known bad domains (social, Western e-commerce, news)
+            if any(d in link for d in BLOCKED_DOMAINS):
+                continue
+
+            # Hard block: non-shopping URL patterns (articles, blogs, editorial)
+            link_lower = link.lower()
+            if any(pat in link_lower for pat in NON_SHOPPING_PATTERNS):
                 continue
 
             price_str = str(p.get("price", "") or "")
 
-            # Hard block: foreign currency price (blocks amazon.ca, etsy CA$, etc.)
+            # Hard block: foreign currency price
             if any(c in price_str for c in FOREIGN_CURRENCY_MARKERS):
                 continue
 
             score = SRC_BOOST.get(p.get("_src", ""), 0)
 
-            # Indian domain boost
+            # Known Indian domain boost
             for domain, boost in INDIAN_BOOST.items():
                 if domain in link:
                     score += boost
@@ -257,7 +272,7 @@ class ShopLensAnalyzer:
             if any(c in price_str for c in INR_MARKERS):
                 score += 2
             elif price_str:
-                score += 1  # has price but no currency marker — small boost
+                score += 1  # has price but no currency symbol — small boost
 
             scored.append((score, p))
 
