@@ -99,11 +99,19 @@ INR_MARKERS = {"₹", "Rs.", "Rs ", "INR"}
 
 # Price strings that indicate foreign currency → hard block
 FOREIGN_CURRENCY_MARKERS = {"US$", "USD", "CA$", "CAD", "AU$", "AUD", "£", "GBP", "€", "EUR", "US $", "C$"}
+
 GARMENT_LABELS = [
     "kurta", "salwar kameez", "saree", "lehenga", "anarkali",
     "dress", "jeans", "trousers", "shirt", "t-shirt",
     "jacket", "blazer", "skirt", "shorts", "ethnic wear",
 ]
+
+# Garments that are unambiguously men's — append "men" to search query and
+# suppress alt-query (prevents women's kurta results for a men's shirt).
+MENS_GARMENTS = {"shirt", "t-shirt", "trousers", "jeans", "blazer", "shorts", "jacket"}
+
+# Garments that are unambiguously women's — append "women" to search query.
+WOMENS_GARMENTS = {"dress", "saree", "lehenga", "anarkali", "salwar kameez", "skirt"}
 COLOR_PALETTE = {
     "red": [210, 50, 50], "pink": [230, 100, 150], "orange": [230, 130, 50],
     "yellow": [220, 200, 60], "green": [60, 150, 60], "blue": [50, 100, 200],
@@ -456,8 +464,22 @@ class ShopLensAnalyzer:
             # Path A inputs: FashionCLIP → garment label + color → search query
             garment, alt_garment = self.classify_garment(cropped_pil)
             color = self.dominant_color(cropped_pil)
-            query = f"{color} {garment}"
-            alt_query = f"{color} {alt_garment}" if alt_garment else None
+
+            # Append gender to query for unambiguously gendered garments.
+            # Also suppress the alt-query: if a brown shirt is confused with
+            # a kurta, running both "brown shirt men" + "brown kurta" would
+            # flood the panel with women's ethnic wear.
+            if garment in MENS_GARMENTS:
+                gender_suffix = " men"
+                alt_garment = None  # Never mix menswear search with ethnic alt
+            elif garment in WOMENS_GARMENTS:
+                gender_suffix = " women"
+                alt_garment = None
+            else:
+                gender_suffix = ""  # kurta/ethnic wear is gender-neutral in India
+
+            query = f"{color} {garment}{gender_suffix}"
+            alt_query = f"{color} {alt_garment}{gender_suffix}" if alt_garment else None
             print(f"[ShopLens] Query: '{query}'" + (f" + alt: '{alt_query}'" if alt_query else ""))
 
             # Path B inputs: encode crop to JPEG → upload for Lens URL
@@ -476,7 +498,8 @@ class ShopLensAnalyzer:
             for p in top_products:
                 title = p.get("title", "")
                 link = p.get("link", "")
-                if not title or not link:
+                # Must be a non-empty https URL — drop anything malformed or empty
+                if not title or not link or not link.startswith("http"):
                     continue
                 if len(title) > 60:
                     title = title[:57] + "..."
