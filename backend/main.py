@@ -22,37 +22,6 @@ image = (
     )
 )
 
-# Maps the SerpApi `source` field from Shopping results to a merchant search URL.
-# Google Shopping returns google.com catalog URLs in `link`; we replace them
-# with a real merchant search URL constructed from the query + source name.
-MERCHANT_SEARCH_URLS = {
-    "myntra":           "https://www.myntra.com/{}",
-    "flipkart":         "https://www.flipkart.com/search?q={}",
-    "amazon":           "https://www.amazon.in/s?k={}",
-    "meesho":           "https://www.meesho.com/search?q={}",
-    "ajio":             "https://www.ajio.com/search/?text={}",
-    "nykaa":            "https://www.nykaafashion.com/search?q={}",
-    "snapdeal":         "https://www.snapdeal.com/search?keyword={}",
-    "tata cliq":        "https://www.tatacliq.com/search/?q={}",
-    "tatacliq":         "https://www.tatacliq.com/search/?q={}",
-    "westside":         "https://www.westside.com/search?type=product&q={}",
-    "bewakoof":         "https://www.bewakoof.com/search/{}",
-    "biba":             "https://www.biba.in/search?q={}",
-    "fabindia":         "https://www.fabindia.com/search?q={}",
-    "libas":            "https://www.libas.in/search?q={}",
-    "aurelia":          "https://www.aurelia.in/search?q={}",
-    "h&m":              "https://www2.hm.com/en_in/search-results.html?q={}",
-    "zara":             "https://www.zara.com/in/en/search?searchTerm={}",
-    "limeroad":         "https://www.limeroad.com/search?q={}",
-    "pantaloons":       "https://www.pantaloons.com/search?q={}",
-    "max fashion":      "https://www.maxfashion.in/in/en/search?text={}",
-    "maxfashion":       "https://www.maxfashion.in/in/en/search?text={}",
-    "global desi":      "https://www.global-desi.com/search?q={}",
-    "virgio":           "https://www.virgio.com/search?q={}",
-    "reliance trends":  "https://www.reliancetrends.com/search?q={}",
-    "urbanic":          "https://www.urbanic.com/search?q={}",
-}
-
 # Known Indian + trusted international selling platforms → score boost
 INDIAN_BOOST = {
     "flipkart.com": 3, "myntra.com": 3, "amazon.in": 3,
@@ -77,22 +46,19 @@ BLOCKED_DOMAINS = {
     "etsy.com", "ebay.com", "ebay.co.uk",
     "walmart.com", "target.com", "nordstrom.com", "macys.com",
     "asos.com", "boohoo.com", "shein.com",
-    # Google's own pages
+    # Google's own pages — shopping results that link back to google.com are
+    # aggregation/comparison pages, not merchant product URLs
     "google.com",
-    # International news / editorial
+    # News, editorial, reference
     "wikipedia.org", "vogue.com", "harpersbazaar.com",
-    "elle.com", "cosmopolitan.com",
-    # Indian news (Google Lens often finds these when it recognises a person)
-    "indiatoday.in", "hindustantimes.com", "ndtv.com", "timesofindia.com",
+    "elle.com", "cosmopolitan.com", "indiatoday.in",
+    "hindustantimes.com", "ndtv.com", "timesofindia.com",
     "news18.com", "firstpost.com", "thehindu.com", "indianexpress.com",
-    "livemint.com", "businessinsider.in", "economictimes.com",
-    # Indian celebrity / entertainment gossip — Lens finds these for any known face
-    "mensxp.com", "scoopwhoop.com", "storypick.com", "vagabomb.com",
-    "bollywoodshaadis.com", "pinkvilla.com", "filmfare.com", "koimoi.com",
-    "bollywoodlife.com", "spotboye.com", "desimartini.com", "glamsham.com",
-    "odishatv.in", "jagranjunction.com", "navbharattimes.com",
-    "scroll.in", "thequint.com", "thewire.in", "theprint.in",
-    "mid-day.com", "dnaindia.com", "deccanherald.com",
+    # Indian celebrity/entertainment — Lens returns these when it recognises a face
+    "mensxp.com", "scoopwhoop.com", "storypick.com", "pinkvilla.com",
+    "filmfare.com", "koimoi.com", "bollywoodlife.com", "spotboye.com",
+    "bollywoodshaadis.com", "desimartini.com", "odishatv.in",
+    "scroll.in", "thequint.com", "mid-day.com", "dnaindia.com",
 }
 
 # URL path patterns that indicate non-shopping pages
@@ -106,20 +72,13 @@ NON_SHOPPING_PATTERNS = [
 INR_MARKERS = {"₹", "Rs.", "Rs ", "INR"}
 
 # Price strings that indicate foreign currency → hard block
-FOREIGN_CURRENCY_MARKERS = {"US$", "USD", "CA$", "CAD", "AU$", "AUD", "£", "GBP", "€", "EUR", "US $", "C$"}
-
+# Plain "$" is intentional — catches "$260", "$325" style USD prices from .us/.co.uk stores
+FOREIGN_CURRENCY_MARKERS = {"US$", "USD", "CA$", "CAD", "AU$", "AUD", "£", "GBP", "€", "EUR", "US $", "C$", "$"}
 GARMENT_LABELS = [
     "kurta", "salwar kameez", "saree", "lehenga", "anarkali",
     "dress", "jeans", "trousers", "shirt", "t-shirt",
     "jacket", "blazer", "skirt", "shorts", "ethnic wear",
 ]
-
-# Garments that are unambiguously men's — append "men" to search query and
-# suppress alt-query (prevents women's kurta results for a men's shirt).
-MENS_GARMENTS = {"shirt", "t-shirt", "trousers", "jeans", "blazer", "shorts", "jacket"}
-
-# Garments that are unambiguously women's — append "women" to search query.
-WOMENS_GARMENTS = {"dress", "saree", "lehenga", "anarkali", "salwar kameez", "skirt"}
 COLOR_PALETTE = {
     "red": [210, 50, 50], "pink": [230, 100, 150], "orange": [230, 130, 50],
     "yellow": [220, 200, 60], "green": [60, 150, 60], "blue": [50, 100, 200],
@@ -173,34 +132,6 @@ class ShopLensAnalyzer:
         )
         print(f"[ShopLens] Color: {color}")
         return color
-
-    def detect_pattern(self, pil_image):
-        """Zero-shot pattern/texture classification using the same FashionCLIP
-        model. Adds crucial visual detail to the text query — 'brown checked shirt'
-        finds plaid shirts; 'brown shirt' finds any brown shirt."""
-        import torch
-        # "solid" is the baseline/default — not added to query.
-        # All others are distinct searchable pattern words.
-        pattern_labels = [
-            "checked", "plaid", "striped", "solid",
-            "printed", "floral", "geometric", "embroidered",
-        ]
-        inputs = self.clip_processor(
-            text=pattern_labels, images=pil_image,
-            return_tensors="pt", padding=True
-        ).to(self.device)
-        with torch.no_grad():
-            probs = self.clip_model(**inputs).logits_per_image.softmax(dim=1)[0]
-        scores = [(float(probs[i]), pattern_labels[i]) for i in range(len(pattern_labels))]
-        scores.sort(reverse=True)
-        top_score, top_pattern = scores[0]
-        print(f"[ShopLens] Pattern: {top_pattern} ({top_score:.2f})")
-        # Merge "plaid" → "checked" (same thing in search terms, "checked" is
-        # far more common in Indian e-commerce search vocabulary)
-        if top_pattern == "plaid":
-            top_pattern = "checked"
-        # Only include pattern in query if it's meaningfully non-solid
-        return "" if top_pattern == "solid" else top_pattern
 
     def upload_image(self, image_bytes):
         image_url = None
@@ -267,12 +198,8 @@ class ShopLensAnalyzer:
 
     def run_parallel_search(self, query, image_url, serpapi_key, alt_query=None):
         from concurrent.futures import ThreadPoolExecutor
-        from urllib.parse import quote_plus
 
         def shopping_search(q):
-            """Google Shopping — returns thumbnail + price, but link is a google.com
-            catalog page. We replace those with real merchant search URLs derived
-            from the `source` field so buyers land on an actual store."""
             try:
                 r = requests.get(
                     "https://serpapi.com/search",
@@ -286,54 +213,11 @@ class ShopLensAnalyzer:
                     },
                     timeout=30,
                 )
-                raw = r.json().get("shopping_results", [])
-                results = []
-                q_enc = quote_plus(q)
-                for p in raw:
-                    link = p.get("link", "") or p.get("product_link", "")
-                    source_name = (p.get("source") or "").lower().strip()
-
-                    # If link is a google.com catalog page, replace with merchant search URL
-                    if not link or "google.com" in link:
-                        link = ""
-                        for key, url_tpl in MERCHANT_SEARCH_URLS.items():
-                            if key in source_name:
-                                link = url_tpl.format(q_enc)
-                                break
-
-                    if link:
-                        p["link"] = link
-                        results.append({"_src": "shopping", **p})
-
-                print(f"[ShopLens] Shopping '{q}': {len(results)} results")
-                sample = [p.get("link", "")[:70] for p in results[:3]]
-                print(f"[ShopLens] Shopping URL sample: {sample}")
-                return results
+                results = r.json().get("shopping_results", [])
+                print(f"[ShopLens] Google Shopping '{q}': {len(results)} results")
+                return [{"_src": "shopping", **p} for p in results]
             except Exception as e:
-                print(f"[ShopLens] Shopping error ({q}): {e}")
-                return []
-
-        def organic_search(q):
-            """Google organic results — always returns real merchant product URLs,
-            but no thumbnail or price. Used to supplement shopping results."""
-            try:
-                r = requests.get(
-                    "https://serpapi.com/search",
-                    params={
-                        "engine": "google",
-                        "q": f"buy {q} online",
-                        "gl": "in",
-                        "hl": "en",
-                        "num": 10,
-                        "api_key": serpapi_key,
-                    },
-                    timeout=30,
-                )
-                results = r.json().get("organic_results", [])
-                print(f"[ShopLens] Organic '{q}': {len(results)} results")
-                return [{"_src": "organic", **p} for p in results]
-            except Exception as e:
-                print(f"[ShopLens] Organic error ({q}): {e}")
+                print(f"[ShopLens] Google Shopping error ({q}): {e}")
                 return []
 
         def google_lens():
@@ -361,18 +245,12 @@ class ShopLensAnalyzer:
                 print(f"[ShopLens] Google Lens error: {e}")
                 return []
 
-        tasks = [
-            (shopping_search, query),
-            (organic_search, query),
-            (google_lens, None),
-        ]
-        if alt_query:
-            tasks.append((shopping_search, alt_query))
-
         futures = []
-        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-            for fn, arg in tasks:
-                futures.append(executor.submit(fn) if arg is None else executor.submit(fn, arg))
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures.append(executor.submit(shopping_search, query))
+            if alt_query:
+                futures.append(executor.submit(shopping_search, alt_query))
+            futures.append(executor.submit(google_lens))
             results = []
             for f in futures:
                 results.extend(f.result())
@@ -395,11 +273,7 @@ class ShopLensAnalyzer:
         sample_shopping = [p.get("link", "")[:80] for p in all_results if p.get("_src") == "shopping" and p.get("link")][:5]
         print(f"[ShopLens] Shopping URL samples: {sample_shopping}")
 
-        # Lens results are based on the actual image and capture visual details
-        # (pattern, texture, cut) that text queries cannot express.
-        # Text shopping (score 1) is a fallback only — Lens always wins.
-        # lens_visual from INDIAN_BOOST = 4+3 = 7; shopping from INDIAN_BOOST = 1+3 = 4
-        SRC_BOOST = {"lens_shopping": 5, "lens_visual": 4, "shopping": 1, "organic": 0}
+        SRC_BOOST = {"lens_shopping": 3, "lens_visual": 1, "shopping": 0}
         blocks = {"blocked_domain": 0, "url_pattern": 0, "lens_visual_not_shopping": 0, "foreign_currency": 0}
         scored = []
         for p in all_results:
@@ -418,19 +292,10 @@ class ShopLensAnalyzer:
                 blocks["url_pattern"] += 1
                 continue
 
-            # Lens visual_matches can return celebrity/news pages when Lens
-            # recognises the person in the frame. Block those via BLOCKED_DOMAINS
-            # (now includes all major Indian entertainment/news sites).
-            # Allow any domain NOT in the blocklist — smaller Indian retailers
-            # and international sites with Indian stores are both acceptable.
+            # Lens visual_matches can return celebrity/news pages for any visually
+            # similar image. Only keep them if they come from a known shopping domain.
             if p.get("_src") == "lens_visual":
-                # Extra guard: URL must look like a product page, not a homepage
-                product_signals = ["/product", "/p/", "/dp/", "/item", "/buy",
-                                   "-shirt", "-kurta", "-dress", "-jacket",
-                                   "-top", "-pant", "-saree", "-kurti", "-suit"]
-                is_from_indian_store = any(d in link for d in INDIAN_BOOST)
-                has_product_url = any(s in link.lower() for s in product_signals)
-                if not is_from_indian_store and not has_product_url:
+                if not any(d in link for d in INDIAN_BOOST):
                     blocks["lens_visual_not_shopping"] += 1
                     continue
 
@@ -512,20 +377,8 @@ class ShopLensAnalyzer:
             # Path A inputs: FashionCLIP → garment label + color → search query
             garment, alt_garment = self.classify_garment(cropped_pil)
             color = self.dominant_color(cropped_pil)
-
-            # Append gender for unambiguously gendered garments and suppress
-            # alt-query to prevent cross-gender results (e.g. kurta alt for a shirt)
-            if garment in MENS_GARMENTS:
-                gender_suffix = " men"
-                alt_garment = None
-            elif garment in WOMENS_GARMENTS:
-                gender_suffix = " women"
-                alt_garment = None
-            else:
-                gender_suffix = ""  # kurta/ethnic wear is gender-neutral in India
-
-            query = f"{color} {garment}{gender_suffix}"
-            alt_query = f"{color} {alt_garment}{gender_suffix}" if alt_garment else None
+            query = f"{color} {garment}"
+            alt_query = f"{color} {alt_garment}" if alt_garment else None
             print(f"[ShopLens] Query: '{query}'" + (f" + alt: '{alt_query}'" if alt_query else ""))
 
             # Path B inputs: encode crop to JPEG → upload for Lens URL
@@ -544,44 +397,17 @@ class ShopLensAnalyzer:
             for p in top_products:
                 title = p.get("title", "")
                 link = p.get("link", "")
-                # Must be a non-empty https URL — drop anything malformed or empty
-                if not title or not link or not link.startswith("http"):
+                if not title or not link:
                     continue
                 if len(title) > 60:
                     title = title[:57] + "..."
-
-                # Price: Shopping results have explicit price field;
-                # Organic results may embed it in rich_snippet or snippet text
                 price = p.get("price", "")
                 if isinstance(price, dict):
-                    price = price.get("value") or str(p.get("extracted_price", "")) or ""
-                if not price:
-                    rich = p.get("rich_snippet", {})
-                    exts = (rich.get("top") or rich.get("bottom") or {}).get("extensions", [])
-                    for ext in exts:
-                        ext_str = str(ext)
-                        if any(c in ext_str for c in INR_MARKERS):
-                            price = ext_str
-                            break
-                if not price:
-                    import re
-                    m = re.search(r'[₹][\s\d,]+', p.get("snippet", ""))
-                    if m:
-                        price = m.group(0).strip()
-
-                # Source: use explicit field, then displayed_link, then domain from URL
-                source = p.get("source", "")
-                if not source:
-                    dl = p.get("displayed_link", "")
-                    source = dl.replace("www.", "").split("/")[0] if dl else ""
-                if not source:
-                    from urllib.parse import urlparse
-                    source = urlparse(link).netloc.replace("www.", "")
-
+                    price = price.get("value") or str(price.get("extracted_price", "")) or ""
                 formatted.append({
                     "title": title,
                     "link": link,
-                    "source": source,
+                    "source": p.get("source", ""),
                     "price": str(price) if price else "",
                     "thumbnail": p.get("thumbnail", ""),
                 })
