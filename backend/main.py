@@ -166,6 +166,34 @@ class ShopLensAnalyzer:
         print(f"[ShopLens] Color: {color}")
         return color
 
+    def detect_pattern(self, pil_image):
+        """Zero-shot pattern/texture classification using the same FashionCLIP
+        model. Adds crucial visual detail to the text query — 'brown checked shirt'
+        finds plaid shirts; 'brown shirt' finds any brown shirt."""
+        import torch
+        # "solid" is the baseline/default — not added to query.
+        # All others are distinct searchable pattern words.
+        pattern_labels = [
+            "checked", "plaid", "striped", "solid",
+            "printed", "floral", "geometric", "embroidered",
+        ]
+        inputs = self.clip_processor(
+            text=pattern_labels, images=pil_image,
+            return_tensors="pt", padding=True
+        ).to(self.device)
+        with torch.no_grad():
+            probs = self.clip_model(**inputs).logits_per_image.softmax(dim=1)[0]
+        scores = [(float(probs[i]), pattern_labels[i]) for i in range(len(pattern_labels))]
+        scores.sort(reverse=True)
+        top_score, top_pattern = scores[0]
+        print(f"[ShopLens] Pattern: {top_pattern} ({top_score:.2f})")
+        # Merge "plaid" → "checked" (same thing in search terms, "checked" is
+        # far more common in Indian e-commerce search vocabulary)
+        if top_pattern == "plaid":
+            top_pattern = "checked"
+        # Only include pattern in query if it's meaningfully non-solid
+        return "" if top_pattern == "solid" else top_pattern
+
     def upload_image(self, image_bytes):
         image_url = None
         log = []
@@ -359,8 +387,11 @@ class ShopLensAnalyzer:
         sample_shopping = [p.get("link", "")[:80] for p in all_results if p.get("_src") == "shopping" and p.get("link")][:5]
         print(f"[ShopLens] Shopping URL samples: {sample_shopping}")
 
-        # shopping: has thumbnail+price → highest value; organic: real product URL but no image
-        SRC_BOOST = {"lens_shopping": 3, "lens_visual": 1, "shopping": 2, "organic": 0}
+        # lens_visual must outscore text shopping so visually matched results
+        # (which capture pattern/texture from the actual image) rank above
+        # generic text results ("brown shirt" finds any solid shirt, not plaid).
+        # lens_visual=4 + INDIAN_BOOST(myntra=3) = 7 → beats shopping=2 + boost=3 = 5
+        SRC_BOOST = {"lens_shopping": 5, "lens_visual": 4, "shopping": 2, "organic": 0}
         blocks = {"blocked_domain": 0, "url_pattern": 0, "lens_visual_not_shopping": 0, "foreign_currency": 0}
         scored = []
         for p in all_results:
@@ -461,25 +492,28 @@ class ShopLensAnalyzer:
 
             cropped_pil = Image.fromarray(cropped)
 
-            # Path A inputs: FashionCLIP → garment label + color → search query
+            # Path A inputs: FashionCLIP → garment label + color + pattern → query
             garment, alt_garment = self.classify_garment(cropped_pil)
             color = self.dominant_color(cropped_pil)
+            pattern = self.detect_pattern(cropped_pil)
 
-            # Append gender to query for unambiguously gendered garments.
-            # Also suppress the alt-query: if a brown shirt is confused with
-            # a kurta, running both "brown shirt men" + "brown kurta" would
-            # flood the panel with women's ethnic wear.
+            # Append gender for unambiguously gendered garments.
+            # Also suppress alt-query for menswear/womenswear to prevent
+            # cross-gender ethnic results flooding the panel.
             if garment in MENS_GARMENTS:
                 gender_suffix = " men"
-                alt_garment = None  # Never mix menswear search with ethnic alt
+                alt_garment = None
             elif garment in WOMENS_GARMENTS:
                 gender_suffix = " women"
                 alt_garment = None
             else:
                 gender_suffix = ""  # kurta/ethnic wear is gender-neutral in India
 
-            query = f"{color} {garment}{gender_suffix}"
-            alt_query = f"{color} {alt_garment}{gender_suffix}" if alt_garment else None
+            # Build query: "brown checked shirt men" — pattern is the key
+            # visual detail that text search would otherwise miss entirely.
+            parts = [p for p in [color, pattern, garment] if p]
+            query = " ".join(parts) + gender_suffix
+            alt_query = (f"{color} {alt_garment}{gender_suffix}") if alt_garment else None
             print(f"[ShopLens] Query: '{query}'" + (f" + alt: '{alt_query}'" if alt_query else ""))
 
             # Path B inputs: encode crop to JPEG → upload for Lens URL
