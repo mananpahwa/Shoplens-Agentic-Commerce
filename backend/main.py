@@ -46,6 +46,9 @@ BLOCKED_DOMAINS = {
     "etsy.com", "ebay.com", "ebay.co.uk",
     "walmart.com", "target.com", "nordstrom.com", "macys.com",
     "asos.com", "boohoo.com", "shein.com",
+    # Google's own pages — shopping results that link back to google.com are
+    # aggregation/comparison pages, not merchant product URLs
+    "google.com",
     # News, editorial, reference
     "wikipedia.org", "vogue.com", "harpersbazaar.com",
     "elle.com", "cosmopolitan.com", "indiatoday.in",
@@ -103,11 +106,15 @@ class ShopLensAnalyzer:
         ).to(self.device)
         with torch.no_grad():
             probs = self.clip_model(**inputs).logits_per_image.softmax(dim=1)[0]
-        top_idx = int(probs.argmax())
-        label = GARMENT_LABELS[top_idx]
-        score = float(probs[top_idx])
-        print(f"[ShopLens] Garment: {label} ({score:.2f})")
-        return label
+        scores = [(float(probs[i]), GARMENT_LABELS[i]) for i in range(len(GARMENT_LABELS))]
+        scores.sort(reverse=True)
+        top_score, top_label = scores[0]
+        second_label = scores[1][1]
+        print(f"[ShopLens] Garment: {top_label} ({top_score:.2f}), runner-up: {second_label} ({scores[1][0]:.2f})")
+        # If confidence is low, return both labels so we run dual queries
+        if top_score < 0.55:
+            return top_label, second_label
+        return top_label, None
 
     def dominant_color(self, pil_image):
         import numpy as np
@@ -183,16 +190,16 @@ class ShopLensAnalyzer:
         print(f"[ShopLens] Upload log: {log} → {'OK' if image_url else 'FAILED'}")
         return image_url
 
-    def run_parallel_search(self, query, image_url, serpapi_key):
+    def run_parallel_search(self, query, image_url, serpapi_key, alt_query=None):
         from concurrent.futures import ThreadPoolExecutor
 
-        def google_shopping():
+        def shopping_search(q):
             try:
                 r = requests.get(
                     "https://serpapi.com/search",
                     params={
                         "engine": "google_shopping",
-                        "q": query,
+                        "q": q,
                         "gl": "in",
                         "hl": "en",
                         "num": 20,
@@ -201,10 +208,10 @@ class ShopLensAnalyzer:
                     timeout=30,
                 )
                 results = r.json().get("shopping_results", [])
-                print(f"[ShopLens] Google Shopping '{query}': {len(results)} results")
+                print(f"[ShopLens] Google Shopping '{q}': {len(results)} results")
                 return [{"_src": "shopping", **p} for p in results]
             except Exception as e:
-                print(f"[ShopLens] Google Shopping error: {e}")
+                print(f"[ShopLens] Google Shopping error ({q}): {e}")
                 return []
 
         def google_lens():
@@ -232,13 +239,36 @@ class ShopLensAnalyzer:
                 print(f"[ShopLens] Google Lens error: {e}")
                 return []
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            f_shopping = executor.submit(google_shopping)
-            f_lens = executor.submit(google_lens)
-            return f_shopping.result() + f_lens.result()
+        futures = []
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures.append(executor.submit(shopping_search, query))
+            if alt_query:
+                futures.append(executor.submit(shopping_search, alt_query))
+            futures.append(executor.submit(google_lens))
+            results = []
+            for f in futures:
+                results.extend(f.result())
+        return results
 
     def merge_and_score(self, all_results):
+        by_src = {}
+        for p in all_results:
+            s = p.get("_src", "?")
+            by_src[s] = by_src.get(s, 0) + 1
+        print(f"[ShopLens] Raw by source: {by_src}")
+
+        # Normalise link field — SerpApi Shopping sometimes uses product_link, not link
+        for p in all_results:
+            if not p.get("link") and p.get("product_link"):
+                p["link"] = p["product_link"]
+
+        no_link = sum(1 for p in all_results if not p.get("link"))
+        print(f"[ShopLens] Results with no link after normalisation: {no_link}")
+        sample_shopping = [p.get("link", "")[:80] for p in all_results if p.get("_src") == "shopping" and p.get("link")][:5]
+        print(f"[ShopLens] Shopping URL samples: {sample_shopping}")
+
         SRC_BOOST = {"lens_shopping": 3, "lens_visual": 1, "shopping": 0}
+        blocks = {"blocked_domain": 0, "url_pattern": 0, "lens_visual_not_shopping": 0, "foreign_currency": 0}
         scored = []
         for p in all_results:
             link = p.get("link", "")
@@ -247,23 +277,27 @@ class ShopLensAnalyzer:
 
             # Hard block: known bad domains (social, Western e-commerce, news)
             if any(d in link for d in BLOCKED_DOMAINS):
+                blocks["blocked_domain"] += 1
                 continue
 
             # Hard block: non-shopping URL patterns (articles, blogs, editorial)
             link_lower = link.lower()
             if any(pat in link_lower for pat in NON_SHOPPING_PATTERNS):
+                blocks["url_pattern"] += 1
                 continue
 
             # Lens visual_matches can return celebrity/news pages for any visually
             # similar image. Only keep them if they come from a known shopping domain.
             if p.get("_src") == "lens_visual":
                 if not any(d in link for d in INDIAN_BOOST):
+                    blocks["lens_visual_not_shopping"] += 1
                     continue
 
             price_str = str(p.get("price", "") or "")
 
             # Hard block: foreign currency price
             if any(c in price_str for c in FOREIGN_CURRENCY_MARKERS):
+                blocks["foreign_currency"] += 1
                 continue
 
             score = SRC_BOOST.get(p.get("_src", ""), 0)
@@ -281,6 +315,10 @@ class ShopLensAnalyzer:
                 score += 1  # has price but no currency symbol — small boost
 
             scored.append((score, p))
+
+        print(f"[ShopLens] Filter blocks: {blocks}, passing score: {len(scored)}")
+        if scored:
+            print(f"[ShopLens] Sample passing URLs: {[p.get('link','')[:60] for _,p in scored[:3]]}")
 
         scored.sort(key=lambda x: -x[0])
 
@@ -331,10 +369,11 @@ class ShopLensAnalyzer:
             cropped_pil = Image.fromarray(cropped)
 
             # Path A inputs: FashionCLIP → garment label + color → search query
-            garment = self.classify_garment(cropped_pil)
+            garment, alt_garment = self.classify_garment(cropped_pil)
             color = self.dominant_color(cropped_pil)
             query = f"{color} {garment}"
-            print(f"[ShopLens] Query: '{query}'")
+            alt_query = f"{color} {alt_garment}" if alt_garment else None
+            print(f"[ShopLens] Query: '{query}'" + (f" + alt: '{alt_query}'" if alt_query else ""))
 
             # Path B inputs: encode crop to JPEG → upload for Lens URL
             buf = io.BytesIO()
@@ -343,7 +382,7 @@ class ShopLensAnalyzer:
 
             # Run both paths in parallel
             serpapi_key = os.environ["SERPAPI_KEY"]
-            all_results = self.run_parallel_search(query, image_url, serpapi_key)
+            all_results = self.run_parallel_search(query, image_url, serpapi_key, alt_query)
             print(f"[ShopLens] Total raw results: {len(all_results)}")
 
             top_products = self.merge_and_score(all_results)
