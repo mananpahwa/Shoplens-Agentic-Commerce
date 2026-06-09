@@ -199,20 +199,22 @@ class ShopLensAnalyzer:
                     "https://serpapi.com/search",
                     params={
                         "engine": "google",
-                        "q": q,
-                        "tbm": "shop",
+                        "q": f"buy {q} online",
                         "gl": "in",
                         "hl": "en",
-                        "num": 20,
+                        "num": 10,
                         "api_key": serpapi_key,
                     },
                     timeout=30,
                 )
-                results = r.json().get("shopping_results", [])
-                print(f"[ShopLens] Google Shopping (tbm=shop) '{q}': {len(results)} results")
+                data = r.json()
+                results = data.get("organic_results", [])
+                print(f"[ShopLens] Google Organic '{q}': {len(results)} results")
+                sample = [p.get("link", "")[:70] for p in results[:3]]
+                print(f"[ShopLens] Organic URL sample: {sample}")
                 return [{"_src": "shopping", **p} for p in results]
             except Exception as e:
-                print(f"[ShopLens] Google Shopping error ({q}): {e}")
+                print(f"[ShopLens] Google Organic error ({q}): {e}")
                 return []
 
         def google_lens():
@@ -396,13 +398,39 @@ class ShopLensAnalyzer:
                     continue
                 if len(title) > 60:
                     title = title[:57] + "..."
+
+                # Price: Shopping results have explicit price field;
+                # Organic results may embed it in rich_snippet or snippet text
                 price = p.get("price", "")
                 if isinstance(price, dict):
-                    price = price.get("value") or str(price.get("extracted_price", "")) or ""
+                    price = price.get("value") or str(p.get("extracted_price", "")) or ""
+                if not price:
+                    rich = p.get("rich_snippet", {})
+                    exts = (rich.get("top") or rich.get("bottom") or {}).get("extensions", [])
+                    for ext in exts:
+                        ext_str = str(ext)
+                        if any(c in ext_str for c in INR_MARKERS):
+                            price = ext_str
+                            break
+                if not price:
+                    import re
+                    m = re.search(r'[₹][\s\d,]+', p.get("snippet", ""))
+                    if m:
+                        price = m.group(0).strip()
+
+                # Source: use explicit field, then displayed_link, then domain from URL
+                source = p.get("source", "")
+                if not source:
+                    dl = p.get("displayed_link", "")
+                    source = dl.replace("www.", "").split("/")[0] if dl else ""
+                if not source:
+                    from urllib.parse import urlparse
+                    source = urlparse(link).netloc.replace("www.", "")
+
                 formatted.append({
                     "title": title,
                     "link": link,
-                    "source": p.get("source", ""),
+                    "source": source,
                     "price": str(price) if price else "",
                     "thumbnail": p.get("thumbnail", ""),
                 })
