@@ -51,7 +51,7 @@ async function handleAnalysis(imageB64, tabId) {
 
     safeSendMessage(tabId, {
       type: 'PRODUCTS_RESULT',
-      products: products.slice(0, 6),
+      products: products.slice(0, 20),
       garment_label: data.garment_label || ''
     });
 

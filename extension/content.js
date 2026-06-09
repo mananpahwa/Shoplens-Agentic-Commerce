@@ -74,7 +74,7 @@ function renderPanel(products, garmentLabel) {
   const list = document.createElement('div');
   list.className = 'shoplens-products-list';
 
-  products.slice(0, 6).forEach((product) => {
+  products.slice(0, 20).forEach((product) => {
     const card = document.createElement('div');
     card.className = 'shoplens-product-card';
     card.innerHTML = `
