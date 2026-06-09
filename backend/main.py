@@ -198,8 +198,43 @@ class ShopLensAnalyzer:
 
     def run_parallel_search(self, query, image_url, serpapi_key, alt_query=None):
         from concurrent.futures import ThreadPoolExecutor
+        from urllib.parse import quote_plus
+
+        # Maps SerpApi `source` name → merchant search URL template.
+        # Google Shopping returns google.com catalog URLs in `link`; we
+        # replace them so the user lands on an actual Indian store.
+        MERCHANT_SEARCH = {
+            "myntra":          "https://www.myntra.com/{}",
+            "flipkart":        "https://www.flipkart.com/search?q={}",
+            "amazon":          "https://www.amazon.in/s?k={}",
+            "meesho":          "https://www.meesho.com/search?q={}",
+            "ajio":            "https://www.ajio.com/search/?text={}",
+            "nykaa":           "https://www.nykaafashion.com/search?q={}",
+            "snapdeal":        "https://www.snapdeal.com/search?keyword={}",
+            "tata cliq":       "https://www.tatacliq.com/search/?q={}",
+            "tatacliq":        "https://www.tatacliq.com/search/?q={}",
+            "westside":        "https://www.westside.com/search?type=product&q={}",
+            "bewakoof":        "https://www.bewakoof.com/search/{}",
+            "biba":            "https://www.biba.in/search?q={}",
+            "fabindia":        "https://www.fabindia.com/search?q={}",
+            "libas":           "https://www.libas.in/search?q={}",
+            "aurelia":         "https://www.aurelia.in/search?q={}",
+            "h&m":             "https://www2.hm.com/en_in/search-results.html?q={}",
+            "zara":            "https://www.zara.com/in/en/search?searchTerm={}",
+            "pantaloons":      "https://www.pantaloons.com/search?q={}",
+            "max fashion":     "https://www.maxfashion.in/in/en/search?text={}",
+            "limeroad":        "https://www.limeroad.com/search?q={}",
+            "reliance trends": "https://www.reliancetrends.com/search?q={}",
+            "urbanic":         "https://www.urbanic.com/search?q={}",
+            "virgio":          "https://www.virgio.com/search?q={}",
+        }
 
         def shopping_search(q):
+            """Google Shopping — returns thumbnail + price for each result.
+            `link` is always a google.com catalog page, so we replace it with
+            a real merchant search URL derived from the `source` field.
+            Results contribute volume to the panel at low priority (score=1)
+            so Lens visual results always rank above them."""
             try:
                 r = requests.get(
                     "https://serpapi.com/search",
@@ -213,11 +248,25 @@ class ShopLensAnalyzer:
                     },
                     timeout=30,
                 )
-                results = r.json().get("shopping_results", [])
-                print(f"[ShopLens] Google Shopping '{q}': {len(results)} results")
-                return [{"_src": "shopping", **p} for p in results]
+                raw = r.json().get("shopping_results", [])
+                q_enc = quote_plus(q)
+                out = []
+                for p in raw:
+                    source_lc = (p.get("source") or "").lower().strip()
+                    link = p.get("product_link") or p.get("link", "")
+                    if not link or "google.com" in link:
+                        link = ""
+                        for key, tpl in MERCHANT_SEARCH.items():
+                            if key in source_lc:
+                                link = tpl.format(q_enc)
+                                break
+                    if link:
+                        p["link"] = link
+                        out.append({"_src": "shopping", **p})
+                print(f"[ShopLens] Shopping '{q}': {len(out)} usable results")
+                return out
             except Exception as e:
-                print(f"[ShopLens] Google Shopping error ({q}): {e}")
+                print(f"[ShopLens] Shopping error ({q}): {e}")
                 return []
 
         def google_lens():
@@ -273,7 +322,12 @@ class ShopLensAnalyzer:
         sample_shopping = [p.get("link", "")[:80] for p in all_results if p.get("_src") == "shopping" and p.get("link")][:5]
         print(f"[ShopLens] Shopping URL samples: {sample_shopping}")
 
-        SRC_BOOST = {"lens_shopping": 3, "lens_visual": 1, "shopping": 0}
+        # Lens results rank first (visual match from actual image).
+        # Shopping text results fill the bottom of the list for catalog depth;
+        # they have thumbnails + prices but no visual matching.
+        # lens_visual from myntra = 1+3 = 4 > shopping from myntra = 1+3 = 4
+        # ... tie broken by INR price boost on lens results where price exists.
+        SRC_BOOST = {"lens_shopping": 3, "lens_visual": 2, "shopping": 1}
         blocks = {"blocked_domain": 0, "url_pattern": 0, "lens_visual_not_shopping": 0, "foreign_currency": 0}
         scored = []
         for p in all_results:
