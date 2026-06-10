@@ -100,17 +100,34 @@ INR_MARKERS = {"₹", "Rs.", "Rs ", "INR"}
 # Price strings that indicate foreign currency → hard block
 FOREIGN_CURRENCY_MARKERS = {"US$", "USD", "CA$", "CAD", "AU$", "AUD", "£", "GBP", "€", "EUR", "US $", "C$"}
 
-GARMENT_LABELS = [
-    "kurta", "salwar kameez", "saree", "lehenga", "anarkali",
-    "dress", "jeans", "trousers", "shirt", "t-shirt",
-    "jacket", "blazer", "skirt", "shorts", "ethnic wear",
+# Descriptive labels for FashionCLIP zero-shot classification.
+# Key insight: CLIP needs visual cues to disambiguate similar garments.
+# Kurta is LONG (below thigh) with ethnic detail; t-shirt is SHORT (waist) with round neck.
+GARMENT_CLIP_LABELS = [
+    "a long Indian kurta tunic reaching below the hip with ethnic neckline",
+    "an Indian salwar kameez suit set with dupatta",
+    "a saree traditional Indian draped garment",
+    "a lehenga Indian bridal or festive skirt",
+    "an anarkali long flared ethnic dress reaching ankles",
+    "a western dress or frock",
+    "jeans or denim trousers",
+    "formal trousers or chinos",
+    "a shirt with collar and front buttons",
+    "a t-shirt with round neckline and short hem ending at waist",
+    "a jacket or coat outerwear",
+    "a blazer formal suit jacket",
+    "a skirt",
+    "shorts",
 ]
 
-# Garments that are unambiguously men's — append "men" to search query and
-# suppress alt-query (prevents women's kurta results for a men's shirt).
-MENS_GARMENTS = {"shirt", "t-shirt", "trousers", "jeans", "blazer", "shorts", "jacket"}
+# Clean search terms matching each label above (same order)
+GARMENT_SEARCH_TERMS = [
+    "kurta", "salwar kameez", "saree", "lehenga", "anarkali",
+    "dress", "jeans", "trousers", "shirt", "t-shirt",
+    "jacket", "blazer", "skirt", "shorts",
+]
 
-# Garments that are unambiguously women's — append "women" to search query.
+MENS_GARMENTS = {"shirt", "t-shirt", "trousers", "jeans", "blazer", "shorts", "jacket"}
 WOMENS_GARMENTS = {"dress", "saree", "lehenga", "anarkali", "salwar kameez", "skirt"}
 COLOR_PALETTE = {
     "red": [210, 50, 50], "pink": [230, 100, 150], "orange": [230, 130, 50],
@@ -140,12 +157,12 @@ class ShopLensAnalyzer:
     def classify_garment(self, pil_image):
         import torch
         inputs = self.clip_processor(
-            text=GARMENT_LABELS, images=pil_image,
+            text=GARMENT_CLIP_LABELS, images=pil_image,
             return_tensors="pt", padding=True
         ).to(self.device)
         with torch.no_grad():
             probs = self.clip_model(**inputs).logits_per_image.softmax(dim=1)[0]
-        scores = [(float(probs[i]), GARMENT_LABELS[i]) for i in range(len(GARMENT_LABELS))]
+        scores = [(float(probs[i]), GARMENT_SEARCH_TERMS[i]) for i in range(len(GARMENT_SEARCH_TERMS))]
         scores.sort(reverse=True)
         top_score, top_label = scores[0]
         second_label = scores[1][1]
