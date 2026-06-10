@@ -208,7 +208,7 @@ chrome.runtime.onMessage.addListener((message) => {
       showToast('Nothing found — try a clearer frame');
       return;
     }
-    renderPanel(message.products, message.garment_label || '');
+    renderPanel(message.products, '');
   }
 });
 
