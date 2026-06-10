@@ -12,10 +12,33 @@ image = (
     modal.Image.debian_slim()
     .apt_install("libgl1-mesa-glx", "libglib2.0-0")
     .pip_install(
-        "pillow", "requests",
-        "fastapi[standard]", "python-multipart",
+        "ultralytics", "pillow", "requests",
+        "fastapi[standard]", "python-multipart", "transformers",
+    )
+    .run_commands(
+        "python -c 'from ultralytics import YOLO; YOLO(\"yolo11n.pt\")'",
+        "python -c 'from transformers import CLIPModel, CLIPProcessor; "
+        "CLIPModel.from_pretrained(\"patrickjohncyh/fashion-clip\"); "
+        "CLIPProcessor.from_pretrained(\"patrickjohncyh/fashion-clip\")'"
     )
 )
+
+GARMENT_LABELS = [
+    "t-shirt", "shirt", "kurta", "dress", "jeans",
+    "trousers", "jacket", "blazer", "saree", "lehenga",
+    "salwar kameez", "skirt", "shorts",
+]
+
+MENS_GARMENTS  = {"shirt", "t-shirt", "trousers", "jeans", "blazer", "shorts", "jacket"}
+WOMENS_GARMENTS = {"dress", "saree", "lehenga", "salwar kameez", "skirt"}
+
+COLOR_PALETTE = {
+    "red": [210,50,50], "pink": [230,100,150], "orange": [230,130,50],
+    "yellow": [220,200,60], "green": [60,150,60], "blue": [50,100,200],
+    "navy": [30,50,120], "purple": [130,60,190], "white": [230,230,230],
+    "black": [30,30,30], "grey": [128,128,128], "beige": [210,190,150],
+    "brown": [130,80,50], "maroon": [128,0,50],
+}
 
 INDIAN_DOMAINS = [
     "myntra.com", "flipkart.com", "amazon.in",
@@ -53,38 +76,97 @@ MERCHANT_SEARCH_URLS = {
 }
 
 
-@app.cls(image=image, secrets=[modal.Secret.from_dotenv()])
+@app.cls(image=image, gpu="T4", secrets=[modal.Secret.from_dotenv()])
 class ShopLensAnalyzer:
 
+    @modal.enter()
+    def load_models(self):
+        from ultralytics import YOLO
+        from transformers import CLIPModel, CLIPProcessor
+        import torch
+        self.yolo = YOLO("yolo11n.pt")
+        self.clip_model = CLIPModel.from_pretrained("patrickjohncyh/fashion-clip")
+        self.clip_processor = CLIPProcessor.from_pretrained("patrickjohncyh/fashion-clip")
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.clip_model.to(self.device)
+        self.clip_model.eval()
+        print(f"[ShopLens] Models loaded on {self.device}")
+
+    def crop_person(self, pil_image):
+        """YOLO person detection — return largest-person crop, or full image."""
+        import numpy as np
+        arr = np.array(pil_image)
+        results = self.yolo(arr, conf=0.5, classes=[0], verbose=False)
+        if results and len(results[0].boxes) > 0:
+            boxes = results[0].boxes
+            areas = [
+                (b.xyxy[0][2] - b.xyxy[0][0]) * (b.xyxy[0][3] - b.xyxy[0][1])
+                for b in boxes
+            ]
+            lb = boxes[areas.index(max(areas))]
+            x1, y1, x2, y2 = lb.xyxy[0].cpu().numpy().astype(int)
+            h, w = arr.shape[:2]
+            crop = arr[max(0,y1):min(h,y2), max(0,x1):min(w,x2)]
+            print(f"[ShopLens] Person crop: {x2-x1}x{y2-y1}px")
+            return Image.fromarray(crop)
+        print("[ShopLens] No person detected, using full frame")
+        return pil_image
+
+    def classify_garment(self, pil_image):
+        import torch
+        inputs = self.clip_processor(
+            text=GARMENT_LABELS, images=pil_image,
+            return_tensors="pt", padding=True
+        ).to(self.device)
+        with torch.no_grad():
+            probs = self.clip_model(**inputs).logits_per_image.softmax(dim=1)[0]
+        scores = sorted(
+            [(float(probs[i]), GARMENT_LABELS[i]) for i in range(len(GARMENT_LABELS))],
+            reverse=True
+        )
+        top_score, top_label = scores[0]
+        print(f"[ShopLens] Garment: {top_label} ({top_score:.2f}), runner-up: {scores[1][1]} ({scores[1][0]:.2f})")
+        return top_label
+
+    def classify_gender(self, pil_image):
+        import torch
+        labels = ["a man wearing clothes", "a woman wearing clothes"]
+        inputs = self.clip_processor(
+            text=labels, images=pil_image,
+            return_tensors="pt", padding=True
+        ).to(self.device)
+        with torch.no_grad():
+            probs = self.clip_model(**inputs).logits_per_image.softmax(dim=1)[0]
+        gender = "men" if float(probs[0]) >= float(probs[1]) else "women"
+        print(f"[ShopLens] Gender: {gender} (man={float(probs[0]):.2f}, woman={float(probs[1]):.2f})")
+        return gender
+
+    def dominant_color(self, pil_image):
+        import numpy as np
+        pixels = np.array(pil_image.resize((50,50))).reshape(-1,3).astype(float)
+        mean = pixels.mean(axis=0)
+        return min(COLOR_PALETTE, key=lambda c: sum((mean[i]-COLOR_PALETTE[c][i])**2 for i in range(3)))
+
     def upload_image(self, image_bytes):
-        image_url = None
-        log = []
-
-        for host, fn in [
-            ("catbox",    self._upload_catbox),
-            ("tmpfiles",  self._upload_tmpfiles),
-            ("uguu",      self._upload_uguu),
-            ("0x0",       self._upload_0x0),
-        ]:
+        for fn in [self._catbox, self._tmpfiles, self._uguu, self._0x0]:
             try:
-                image_url = fn(image_bytes)
-                log.append(f"{host}=ok")
-                if image_url:
-                    break
+                url = fn(image_bytes)
+                if url:
+                    print(f"[ShopLens] Uploaded: {url}")
+                    return url
             except Exception as e:
-                log.append(f"{host}=err:{str(e)[:30]}")
+                print(f"[ShopLens] Upload attempt failed: {e}")
+        print("[ShopLens] All uploads failed")
+        return None
 
-        print(f"[ShopLens] Upload: {log} → {image_url or 'FAILED'}")
-        return image_url
-
-    def _upload_catbox(self, b):
+    def _catbox(self, b):
         r = requests.post("https://catbox.moe/user/api.php",
             data={"reqtype": "fileupload"},
             files={"fileToUpload": ("image.jpg", b, "image/jpeg")}, timeout=30)
-        url = r.text.strip()
-        return url if r.status_code == 200 and url.startswith("https://") else None
+        u = r.text.strip()
+        return u if r.status_code == 200 and u.startswith("https://") else None
 
-    def _upload_tmpfiles(self, b):
+    def _tmpfiles(self, b):
         r = requests.post("https://tmpfiles.org/api/v1/upload",
             files={"file": ("image.jpg", b, "image/jpeg")}, timeout=30)
         if r.status_code == 200:
@@ -92,7 +174,7 @@ class ShopLensAnalyzer:
             return raw.replace("tmpfiles.org/", "tmpfiles.org/dl/") if raw else None
         return None
 
-    def _upload_uguu(self, b):
+    def _uguu(self, b):
         r = requests.post("https://uguu.se/upload.php",
             files={"files[]": ("image.jpg", b, "image/jpeg")}, timeout=30)
         if r.status_code == 200:
@@ -100,153 +182,120 @@ class ShopLensAnalyzer:
             return files[0]["url"] if files else None
         return None
 
-    def _upload_0x0(self, b):
+    def _0x0(self, b):
         r = requests.post("https://0x0.st",
             files={"file": ("image.jpg", b, "image/jpeg")}, timeout=30)
-        url = r.text.strip()
-        return url if r.status_code == 200 and url.startswith("http") else None
+        u = r.text.strip()
+        return u if r.status_code == 200 and u.startswith("http") else None
 
     def is_indian(self, url):
         return any(d in url for d in INDIAN_DOMAINS)
 
-    def format_product(self, p, thumbnail=None):
-        title = (p.get("title") or "")[:60]
+    def format_product(self, p):
         link = p.get("link") or p.get("product_link", "")
-        price = str(p.get("price", "") or "")
+        title = (p.get("title") or "")[:60]
         source = p.get("source", "")
-        if not source:
+        if not source and link:
             from urllib.parse import urlparse
             source = urlparse(link).netloc.replace("www.", "")
         return {
             "title": title,
             "link": link,
-            "price": price,
+            "price": str(p.get("price", "") or ""),
             "source": source,
-            "thumbnail": thumbnail or p.get("thumbnail", ""),
+            "thumbnail": p.get("thumbnail", ""),
         }
-
-    def google_lens(self, image_url, serpapi_key):
-        r = requests.get("https://serpapi.com/search", params={
-            "engine": "google_lens",
-            "url": image_url,
-            "gl": "in", "hl": "en",
-            "api_key": serpapi_key,
-        }, timeout=30)
-        data = r.json()
-        shopping = data.get("shopping_results", [])
-        visual = data.get("visual_matches", [])
-        print(f"[ShopLens] Lens raw: {len(shopping)} shopping, {len(visual)} visual")
-        return shopping, visual
-
-    def google_shopping(self, query, serpapi_key):
-        r = requests.get("https://serpapi.com/search", params={
-            "engine": "google_shopping",
-            "q": query,
-            "gl": "in", "hl": "en",
-            "num": 20,
-            "api_key": serpapi_key,
-        }, timeout=30)
-        results = r.json().get("shopping_results", [])
-        print(f"[ShopLens] Shopping '{query}': {len(results)} results")
-        return results
-
-    def shopping_query_from_visual(self, visual_matches):
-        """Extract a product-like search query from Lens visual match titles."""
-        skip_words = {
-            "buy", "shop", "online", "india", "price", "style", "wear",
-            "outfit", "look", "fashion", "trend", "celebrity", "actor",
-            "actress", "bollywood", "photo", "image", "picture",
-        }
-        for match in visual_matches[:8]:
-            title = (match.get("title") or "").strip()
-            if not title or len(title) < 5:
-                continue
-            # Skip non-product titles (news/blog/celebrity)
-            lower = title.lower()
-            if any(w in lower for w in ["–", " in ", " at ", " of ", " by ", " and "]):
-                continue
-            # Looks product-like — use it
-            words = [w for w in title.split() if w.lower() not in skip_words]
-            if len(words) >= 2:
-                print(f"[ShopLens] Using visual title as query: '{title}'")
-                return " ".join(words[:6])
-        # Fallback: use the raw first title
-        if visual_matches:
-            return (visual_matches[0].get("title") or "")[:50]
-        return ""
 
     @modal.fastapi_endpoint(method="POST")
     def analyze(self, item: dict):
         try:
+            import numpy as np
+
             image_b64 = item.get("image_b64", "")
             if not image_b64:
                 return {"products": [], "error": "no image provided"}
 
             img_bytes = base64.b64decode(image_b64)
-            pil = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-            pil.thumbnail((1280, 1280))
-            buf = io.BytesIO()
-            pil.save(buf, format="JPEG", quality=85)
-            img_bytes = buf.getvalue()
+            pil_full = Image.open(io.BytesIO(img_bytes)).convert("RGB")
 
-            image_url = self.upload_image(img_bytes)
-            if not image_url:
-                return {"products": [], "error": "image upload failed"}
+            # ── Step 1: Crop to person ──────────────────────────────────────
+            # This removes all background text, captions, and overlays so that
+            # both Lens and FashionCLIP see only the outfit, not the scene.
+            person_crop = self.crop_person(pil_full)
+
+            # ── Step 2: Upload the CROP (not full frame) for Lens ──────────
+            buf = io.BytesIO()
+            person_crop.save(buf, format="JPEG", quality=85)
+            image_url = self.upload_image(buf.getvalue())
 
             serpapi_key = os.environ["SERPAPI_KEY"]
-
-            # Step 1 — Google Lens visual search
-            lens_shopping, visual_matches = self.google_lens(image_url, serpapi_key)
-
             products = []
             seen = set()
 
-            # Prefer Lens shopping results from Indian domains (have price + thumbnail)
-            for p in lens_shopping:
-                link = p.get("link") or p.get("product_link", "")
-                if not link or link in seen or not self.is_indian(link):
-                    continue
-                seen.add(link)
-                products.append(self.format_product(p))
+            # ── Step 3: Google Lens on person crop ─────────────────────────
+            if image_url:
+                r = requests.get("https://serpapi.com/search", params={
+                    "engine": "google_lens",
+                    "url": image_url,
+                    "gl": "in", "hl": "en",
+                    "api_key": serpapi_key,
+                }, timeout=30)
+                data = r.json()
+                lens_shopping = data.get("shopping_results", [])
+                visual_matches = data.get("visual_matches", [])
+                print(f"[ShopLens] Lens: {len(lens_shopping)} shopping, {len(visual_matches)} visual")
 
-            # Then Lens visual matches from Indian domains
-            for p in visual_matches:
-                link = p.get("link", "")
-                if not link or link in seen or not self.is_indian(link):
-                    continue
-                seen.add(link)
-                products.append(self.format_product(p))
+                for p in lens_shopping + visual_matches:
+                    link = p.get("link") or p.get("product_link", "")
+                    if not link or link in seen or not self.is_indian(link):
+                        continue
+                    seen.add(link)
+                    products.append(self.format_product(p))
 
-            print(f"[ShopLens] After Lens filter: {len(products)} Indian results")
+                print(f"[ShopLens] After Lens filter: {len(products)} Indian results")
 
-            # Step 2 — If Lens didn't return enough Indian results, fall back to
-            # Google Shopping using the visual match title as the search query.
-            # Lens understands the image visually; we use its title as a text query
-            # for Indian store search so we always return something relevant.
+            # ── Step 4: FashionCLIP fallback ───────────────────────────────
+            # Lens rarely returns Indian shopping results for person images.
+            # FashionCLIP runs on the person crop (no background text) so
+            # classification is about the garment only.
             if len(products) < 4:
-                query = self.shopping_query_from_visual(visual_matches)
-                if not query:
-                    query = "fashion clothing"
-                print(f"[ShopLens] Falling back to Shopping with: '{query}'")
+                garment = self.classify_garment(person_crop)
+                gender  = self.classify_gender(person_crop)
+                color   = self.dominant_color(person_crop)
 
-                shopping_results = self.google_shopping(query, serpapi_key)
+                # Suppress gender for garments that are explicitly gendered
+                # in the label (saree/lehenga will always be women's, etc.)
+                if garment in MENS_GARMENTS or garment in WOMENS_GARMENTS:
+                    gender_suffix = ""  # garment name already implies gender
+                else:
+                    gender_suffix = f" {gender}"
+
+                query = f"{color} {garment}{gender_suffix}"
+                print(f"[ShopLens] FashionCLIP fallback query: '{query}'")
+
                 q_enc = quote_plus(query)
+                r = requests.get("https://serpapi.com/search", params={
+                    "engine": "google_shopping",
+                    "q": query,
+                    "gl": "in", "hl": "en",
+                    "num": 20,
+                    "api_key": serpapi_key,
+                }, timeout=30)
+                shopping_results = r.json().get("shopping_results", [])
+                print(f"[ShopLens] Shopping results: {len(shopping_results)}")
 
                 for p in shopping_results:
                     link = p.get("link") or p.get("product_link", "")
                     source_name = (p.get("source") or "").lower().strip()
 
-                    # Replace google.com catalog URLs with real merchant search URLs
                     if not link or "google.com" in link:
                         link = ""
-                        for key, url_tpl in MERCHANT_SEARCH_URLS.items():
+                        for key, tpl in MERCHANT_SEARCH_URLS.items():
                             if key in source_name:
-                                link = url_tpl.format(q_enc)
+                                link = tpl.format(q_enc)
                                 break
 
-                    if not link or not link.startswith("http"):
-                        continue
-                    if link in seen:
+                    if not link or not link.startswith("http") or link in seen:
                         continue
                     if not self.is_indian(link):
                         continue
@@ -254,9 +303,9 @@ class ShopLensAnalyzer:
                     seen.add(link)
                     products.append(self.format_product(p))
 
-                print(f"[ShopLens] After Shopping fallback: {len(products)} total")
+                print(f"[ShopLens] Total after fallback: {len(products)}")
 
-            return {"products": products[:10]}
+            return {"products": products[:10], "garment_label": ""}
 
         except Exception as e:
             import traceback
