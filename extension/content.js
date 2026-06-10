@@ -74,7 +74,7 @@ function renderPanel(products, garmentLabel) {
   const list = document.createElement('div');
   list.className = 'shoplens-products-list';
 
-  products.filter(p => p.link && p.link.startsWith('http')).slice(0, 20).forEach((product) => {
+  products.filter(p => p.link && p.link.startsWith('http')).forEach((product) => {
     const card = document.createElement('div');
     card.className = 'shoplens-product-card';
     card.innerHTML = `

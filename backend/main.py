@@ -150,10 +150,24 @@ class ShopLensAnalyzer:
         top_score, top_label = scores[0]
         second_label = scores[1][1]
         print(f"[ShopLens] Garment: {top_label} ({top_score:.2f}), runner-up: {second_label} ({scores[1][0]:.2f})")
-        # If confidence is low, return both labels so we run dual queries
         if top_score < 0.55:
             return top_label, second_label
         return top_label, None
+
+    def classify_gender(self, pil_image):
+        """Binary gender classification on the person crop using FashionCLIP."""
+        import torch
+        labels = ["a man wearing clothes", "a woman wearing clothes"]
+        inputs = self.clip_processor(
+            text=labels, images=pil_image,
+            return_tensors="pt", padding=True
+        ).to(self.device)
+        with torch.no_grad():
+            probs = self.clip_model(**inputs).logits_per_image.softmax(dim=1)[0]
+        man_prob, woman_prob = float(probs[0]), float(probs[1])
+        gender = "men" if man_prob >= woman_prob else "women"
+        print(f"[ShopLens] Gender: {gender} (man={man_prob:.2f}, woman={woman_prob:.2f})")
+        return gender
 
     def dominant_color(self, pil_image):
         import numpy as np
@@ -415,20 +429,29 @@ class ShopLensAnalyzer:
 
         scored.sort(key=lambda x: -x[0])
 
+        # Dynamic cutoff: keep results within 3 points of the best score so
+        # low-confidence outliers are dropped. Hard floor at score >= 3
+        # (requires at least one positive signal beyond source boost alone).
+        best_score = scored[0][0] if scored else 0
+        min_score = max(3, best_score - 3)
+
         seen_urls, domain_counts, final = set(), {}, []
         for score, p in scored:
+            if score < min_score:
+                break
             link = p.get("link", "")
             if link in seen_urls:
                 continue
             seen_urls.add(link)
             domain = next((d for d in INDIAN_BOOST if d in link), "other")
-            if domain_counts.get(domain, 0) >= 3:
+            if domain_counts.get(domain, 0) >= 2:
                 continue
             domain_counts[domain] = domain_counts.get(domain, 0) + 1
             final.append(p)
-            if len(final) == 20:
+            if len(final) == 10:
                 break
 
+        print(f"[ShopLens] best_score={best_score}, min_score={min_score}, returning {len(final)}")
         return final
 
     @modal.fastapi_endpoint(method="POST")
@@ -461,22 +484,17 @@ class ShopLensAnalyzer:
 
             cropped_pil = Image.fromarray(cropped)
 
-            # Path A inputs: FashionCLIP → garment label + color → search query
+            # Path A inputs: FashionCLIP → garment label + gender + color → search query
             garment, alt_garment = self.classify_garment(cropped_pil)
+            gender = self.classify_gender(cropped_pil)
             color = self.dominant_color(cropped_pil)
 
-            # Append gender to query for unambiguously gendered garments.
-            # Also suppress the alt-query: if a brown shirt is confused with
-            # a kurta, running both "brown shirt men" + "brown kurta" would
-            # flood the panel with women's ethnic wear.
-            if garment in MENS_GARMENTS:
-                gender_suffix = " men"
-                alt_garment = None  # Never mix menswear search with ethnic alt
-            elif garment in WOMENS_GARMENTS:
-                gender_suffix = " women"
+            # Always use the detected gender so kurta/ethnic wear also gets
+            # a gender suffix. Suppress alt_query for strongly gendered garments
+            # to avoid cross-gender category flooding.
+            gender_suffix = f" {gender}"
+            if garment in MENS_GARMENTS or garment in WOMENS_GARMENTS:
                 alt_garment = None
-            else:
-                gender_suffix = ""  # kurta/ethnic wear is gender-neutral in India
 
             query = f"{color} {garment}{gender_suffix}"
             alt_query = f"{color} {alt_garment}{gender_suffix}" if alt_garment else None
